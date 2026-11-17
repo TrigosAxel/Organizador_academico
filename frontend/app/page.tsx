@@ -127,7 +127,7 @@ export default function Home() {
 
   const [editandoFin, setEditandoFin] = useState(false);
   const [inputFinCursada, setInputFinCursada] = useState('');
-  const [ahora, setAhora] = useState<number>(() => Date.now());
+  const [ahora, setAhora] = useState<number>(0);
 
   const [mesActual, setMesActual] = useState(() => {
     const hoy = new Date();
