@@ -482,7 +482,7 @@ export default function Home() {
         body: JSON.stringify({
           nombre: nombre.trim(),
           anio_carrera: parseInt(String(anioCarrera)) || 1,
-          cuatrimestre: cuatrimestre ? cuatrimestre.toLowerCase() : 'anual',
+         cuatrimestre: cuatrimestre, // o cuatrimestre === 'anual' ? 'Anual' : cuatrimestre
           estado: estado ? estado.toLowerCase() : 'pendiente',
           nota_final: estado === 'aprobada' && notaFinal ? Number(notaFinal) : null,
           modalidad_aprobacion: estado === 'aprobada' ? modalidadAprobacion.toLowerCase() : null,
