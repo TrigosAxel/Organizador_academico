@@ -491,9 +491,13 @@ export default function Home() {
       const nuevaMateriaBD = await response.json();
       setMaterias([...materias, nuevaMateriaBD]);
       setNombre(''); // Limpia el input
+      if (typeof cargarDatosAuth === 'function' && token) {
+        cargarDatosAuth(token);
+      }
     } else {
       console.error('Error al guardar en el servidor');
     }
+ 
   } catch (error) {
     console.error('Error de red al agregar materia:', error);
   }
