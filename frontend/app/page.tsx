@@ -105,11 +105,9 @@ export default function Home() {
   const [authError, setAuthError] = useState('');
   const [verificandoSesion, setVerificandoSesion] = useState(true);
 
-  // Modal de Migración de Invitado -> Cuenta
   const [mostrarModalMigracion, setMostrarModalMigracion] = useState(false);
   const [migrando, setMigrando] = useState(false);
 
-  // Navegación
   const [tab, setTab] = useState<
     'materias' | 'horarios' | 'examenes' | 'tps' | 'calendario' | 'correlativas'
   >('materias');
@@ -120,21 +118,17 @@ export default function Home() {
   const [examenes, setExamenes] = useState<Examen[]>([]);
   const [tps, setTps] = useState<TrabajoPractico[]>([]);
 
-  // Filtros de búsqueda de Materias
   const [busqueda, setBusqueda] = useState('');
   const [filtroAnio, setFiltroAnio] = useState<string>('todos');
   const [filtroEstado, setFiltroEstado] = useState<string>('todos');
 
-  // Importador
   const [mostrarImportador, setMostrarImportador] = useState(false);
   const [textoImportar, setTextoImportar] = useState('');
 
-  // Reloj Fin de Cursada
   const [editandoFin, setEditandoFin] = useState(false);
   const [inputFinCursada, setInputFinCursada] = useState('');
   const [ahora, setAhora] = useState<number>(() => Date.now());
 
-  // Calendario + Agenda
   const [mesActual, setMesActual] = useState(() => {
     const hoy = new Date();
     return { anio: hoy.getFullYear(), mes: hoy.getMonth() };
@@ -142,7 +136,6 @@ export default function Home() {
   const [diaSeleccionado, setDiaSeleccionado] = useState<string | null>(null);
   const [tipoAgendarRapido, setTipoAgendarRapido] = useState<'examen' | 'tp'>('examen');
 
-  // Formulario Materias
   const [nombre, setNombre] = useState('');
   const [anioCarrera, setAnioCarrera] = useState(1);
   const [cuatrimestre, setCuatrimestre] = useState('1ro');
@@ -151,34 +144,25 @@ export default function Home() {
   const [modalidadAprobacion, setModalidadAprobacion] = useState<'promocionada' | 'final'>('promocionada');
   const [asistenciaMinima, setAsistenciaMinima] = useState(75);
 
-  // Formulario Horarios
   const [horMateriaId, setHorMateriaId] = useState('');
   const [horDia, setHorDia] = useState<Horario['dia_semana']>('Lunes');
   const [horInicio, setHorInicio] = useState('18:00');
   const [horFin, setHorFin] = useState('21:00');
   const [horAula, setHorAula] = useState('');
 
-  // Formulario Exámenes
   const [examMateriaId, setExamMateriaId] = useState('');
   const [examTitulo, setExamTitulo] = useState('');
   const [examFecha, setExamFecha] = useState('');
   const [examNotas, setExamNotas] = useState('');
 
-  // Formulario TPs
   const [tpMateriaId, setTpMateriaId] = useState('');
   const [tpTitulo, setTpTitulo] = useState('');
   const [tpFecha, setTpFecha] = useState('');
   const [tpDescripcion, setTpDescripcion] = useState('');
 
-  // Formulario Correlativas
   const [corrMateriaId, setCorrMateriaId] = useState('');
   const [corrRequisitoId, setCorrRequisitoId] = useState('');
   const [corrTipo, setCorrTipo] = useState<'regular' | 'aprobada'>('regular');
-
-  useEffect(() => {
-    const intervalo = setInterval(() => setAhora(Date.now()), 1000);
-    return () => clearInterval(intervalo);
-  }, []);
 
   const guardarGuestLocal = (datos: {
     usuario?: Usuario;
@@ -231,6 +215,7 @@ export default function Home() {
 
   useEffect(() => {
     let activo = true;
+    const intervalo = setInterval(() => setAhora(Date.now()), 1000);
 
     const inicializar = async () => {
       const guardadoToken = localStorage.getItem('organizador_token');
@@ -279,6 +264,7 @@ export default function Home() {
     inicializar();
     return () => {
       activo = false;
+      clearInterval(intervalo);
     };
   }, [cargarDatosAuth]);
 
@@ -301,7 +287,6 @@ export default function Home() {
     guardarGuestLocal({ usuario: userInvitado });
   };
 
-  // --- Login / Registro (y migración si venimos de Modo Invitado) ---
   const manejarAuth = async (e: React.FormEvent, migrarDatosLocales = false) => {
     e.preventDefault();
     setAuthError('');
@@ -325,7 +310,6 @@ export default function Home() {
         return;
       }
 
-      // Si había datos en modo invitado y pidió migrarlos, los enviamos a PostgreSQL
       if (migrarDatosLocales) {
         await fetch(`${BASE_API}/auth/migrar-invitado`, {
           method: 'POST',
@@ -372,7 +356,6 @@ export default function Home() {
     setCorrelativas([]);
   };
 
-  // --- Exportar Avance Académico (CSV y PDF/Impresión) ---
   const exportarCSV = () => {
     const encabezados = ['Año', 'Cuatrimestre', 'Materia', 'Estado', 'Modalidad', 'Nota Final', 'Asistencia (%)'];
     const filas = materias.map((m) => {
@@ -458,7 +441,6 @@ export default function Home() {
     ventana.document.close();
   };
 
-  // --- Fin de cursada ---
   const guardarFinCursada = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputFinCursada || !usuario) return;
@@ -482,7 +464,6 @@ export default function Home() {
     cargarDatosAuth(token);
   };
 
-  // --- Materias ---
   const agregarMateria = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!nombre.trim()) return;
@@ -653,7 +634,6 @@ export default function Home() {
     importarPlan(lista);
   };
 
-  // --- Horarios ---
   const agregarHorario = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!horMateriaId || !horInicio || !horFin) return;
@@ -708,7 +688,6 @@ export default function Home() {
     cargarDatosAuth(token);
   };
 
-  // --- Exámenes ---
   const agregarExamen = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!examMateriaId || !examTitulo.trim() || !examFecha) return;
@@ -820,7 +799,6 @@ export default function Home() {
     cargarDatosAuth(token);
   };
 
-  // --- Trabajos Prácticos ---
   const agregarTp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!tpMateriaId || !tpTitulo.trim() || !tpFecha) return;
@@ -902,7 +880,6 @@ export default function Home() {
     cargarDatosAuth(token);
   };
 
-  // --- Correlativas ---
   const agregarCorrelativa = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!corrMateriaId || !corrRequisitoId || corrMateriaId === corrRequisitoId) return;
@@ -955,9 +932,8 @@ export default function Home() {
     cargarDatosAuth(token);
   };
 
-  // --- Helpers ---
   const calcularCuentaRegresivaCursada = () => {
-    if (!usuario?.fin_cursada) return null;
+    if (!usuario?.fin_cursada || ahora === 0) return null;
     const diff = new Date(usuario.fin_cursada).getTime() - ahora;
     if (diff <= 0) return { finalizado: true, dias: 0, horas: 0, minutos: 0, segundos: 0 };
     return {
@@ -1002,7 +978,6 @@ export default function Home() {
     return celdas;
   };
 
-  // ==================== PANTALLA DE BIENVENIDA / LOGIN / INVITADO ====================
   if (verificandoSesion) {
     return (
       <main className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-4">
@@ -1122,8 +1097,6 @@ export default function Home() {
     );
   }
 
-  // ==================== APLICACIÓN PRINCIPAL ====================
-  const cuentaRegresiva = calcularCuentaRegresivaCursada();
   const aprobadas = materias.filter((m) => m.estado === 'aprobada');
   const porcentajeCarrera =
     materias.length > 0 ? Math.round((aprobadas.length / materias.length) * 100) : 0;
@@ -1172,7 +1145,6 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100 p-4 sm:p-6 md:p-10">
       <div className="max-w-6xl mx-auto space-y-6">
-        {/* Barra superior de Bienvenida equilibrada + Botón Migrar Cuenta */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-zinc-900/80 border border-zinc-800 rounded-2xl px-4 sm:px-5 py-3.5">
           <div className="flex flex-wrap items-center gap-2.5">
             <span className="text-base sm:text-lg font-semibold text-zinc-100">
@@ -1206,7 +1178,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Modal de Migración de Invitado a Cuenta */}
         {mostrarModalMigracion && (
           <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="w-full max-w-md bg-zinc-900 border border-zinc-700 rounded-2xl p-6 space-y-5 shadow-2xl">
@@ -1300,27 +1271,26 @@ export default function Home() {
           </div>
         )}
 
-        {/* Banner Reloj Fin de Cursada */}
         <section className="bg-gradient-to-r from-zinc-900 via-zinc-900 to-blue-950/40 border border-zinc-800 rounded-2xl p-4 sm:p-5 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="text-center md:text-left">
             <span className="text-xs font-semibold uppercase tracking-wider text-blue-400">
               Fin de la cursada
             </span>
-            {!cuentaRegresiva ? (
+            {!calcularCuentaRegresivaCursada() ? (
               <p className="text-zinc-300 text-sm mt-1">
                 Definí cuándo termina tu cursada para iniciar la cuenta regresiva en vivo.
               </p>
-            ) : cuentaRegresiva.finalizado ? (
+            ) : calcularCuentaRegresivaCursada()?.finalizado ? (
               <h2 className="text-2xl sm:text-3xl font-extrabold text-emerald-400 mt-1">
                 ¡FIN DE CURSADA!
               </h2>
             ) : (
               <div className="flex items-center justify-center md:justify-start gap-2 sm:gap-3 mt-2 font-mono">
                 {[
-                  { val: cuentaRegresiva.dias, label: 'Días', color: 'text-white' },
-                  { val: cuentaRegresiva.horas, label: 'Horas', color: 'text-white' },
-                  { val: cuentaRegresiva.minutos, label: 'Min', color: 'text-white' },
-                  { val: cuentaRegresiva.segundos, label: 'Seg', color: 'text-blue-400' },
+                  { val: calcularCuentaRegresivaCursada()?.dias ?? 0, label: 'Días', color: 'text-white' },
+                  { val: calcularCuentaRegresivaCursada()?.horas ?? 0, label: 'Horas', color: 'text-white' },
+                  { val: calcularCuentaRegresivaCursada()?.minutos ?? 0, label: 'Min', color: 'text-white' },
+                  { val: calcularCuentaRegresivaCursada()?.segundos ?? 0, label: 'Seg', color: 'text-blue-400' },
                 ].map((b, i) => (
                   <div key={b.label} className="flex items-center gap-2 sm:gap-3">
                     {i > 0 && <span className="text-zinc-600 font-bold">:</span>}
@@ -1369,7 +1339,6 @@ export default function Home() {
           )}
         </section>
 
-        {/* Encabezado, métricas, exportación y barra de avance */}
         <header className="space-y-4 border-b border-zinc-800 pb-6">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div className="space-y-2">
@@ -1423,7 +1392,6 @@ export default function Home() {
           </div>
         </header>
 
-        {/* Navegación por pestañas (deslizable en celular) */}
         <nav className="flex overflow-x-auto gap-2 border-b border-zinc-800 pb-3 no-scrollbar">
           {[
             { id: 'materias', label: `Materias (${materias.length})` },
@@ -1447,7 +1415,6 @@ export default function Home() {
           ))}
         </nav>
 
-        {/* ==================== PESTAÑA 1: MATERIAS ==================== */}
         {tab === 'materias' && (
           <div className="space-y-6">
             <div className="flex justify-end">
@@ -1810,7 +1777,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* ==================== PESTAÑA 2: HORARIOS ==================== */}
         {tab === 'horarios' && (
           <div className="space-y-6">
             <form
@@ -1944,7 +1910,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* ==================== PESTAÑA 3: EXÁMENES ==================== */}
         {tab === 'examenes' && (
           <div className="space-y-6">
             <form
@@ -2130,7 +2095,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* ==================== PESTAÑA 4: TRABAJOS PRÁCTICOS ==================== */}
         {tab === 'tps' && (
           <div className="space-y-6">
             <form
@@ -2276,7 +2240,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* ==================== PESTAÑA 5: CALENDARIO + AGENDA ==================== */}
         {tab === 'calendario' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2 bg-zinc-900 border border-zinc-800 rounded-2xl p-4 sm:p-5 space-y-5">
@@ -2605,7 +2568,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* ==================== PESTAÑA 6: CORRELATIVIDADES ==================== */}
         {tab === 'correlativas' && (
           <div className="space-y-6">
             <form
