@@ -110,6 +110,16 @@ export default function Home() {
   const [authError, setAuthError] = useState('');
   const [verificandoSesion, setVerificandoSesion] = useState(true);
 
+  // Recuperación de contraseña (pantallas propias)
+  const [vistaRecuperar, setVistaRecuperar] = useState<'olvide' | 'reset' | null>(null);
+  const [recuEmail, setRecuEmail] = useState('');
+  const [recuPass, setRecuPass] = useState('');
+  const [recuPass2, setRecuPass2] = useState('');
+  const [resetToken, setResetToken] = useState('');
+  const [recuError, setRecuError] = useState('');
+  const [recuMensaje, setRecuMensaje] = useState('');
+  const [recuCargando, setRecuCargando] = useState(false);
+
   const [mostrarModalMigracion, setMostrarModalMigracion] = useState(false);
   const [migrando, setMigrando] = useState(false);
 
@@ -214,6 +224,15 @@ export default function Home() {
     if (Array.isArray(dataCorr)) setCorrelativas(dataCorr);
     if (Array.isArray(dataExam)) setExamenes(dataExam);
     if (Array.isArray(dataTps)) setTps(dataTps);
+  }, []);
+
+  // Si el usuario llega desde el link del mail (?token=...), se abre la pantalla de nueva contraseña
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('token');
+    if (t) {
+      setResetToken(t);
+      setVistaRecuperar('reset');
+    }
   }, []);
 
   useEffect(() => {
@@ -985,6 +1004,163 @@ export default function Home() {
     );
   }
 
+  const cerrarRecuperacion = () => {
+    setVistaRecuperar(null);
+    setResetToken('');
+    setRecuPass('');
+    setRecuPass2('');
+    setRecuError('');
+    setRecuMensaje('');
+    if (window.location.search) window.history.replaceState({}, '', window.location.pathname);
+  };
+
+  const enviarRecuperacion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRecuError('');
+    setRecuMensaje('');
+    setRecuCargando(true);
+    try {
+      const res = await fetch(`${BASE_API}/auth/recuperar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: recuEmail.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) setRecuError(data.error || 'No se pudo enviar el correo');
+      else setRecuMensaje(data.mensaje || 'Revisá tu correo para continuar.');
+    } catch {
+      setRecuError('No se pudo conectar con el servidor');
+    } finally {
+      setRecuCargando(false);
+    }
+  };
+
+  const guardarNuevaPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRecuError('');
+    if (recuPass.length < 6) {
+      setRecuError('La contraseña debe tener al menos 6 caracteres');
+      return;
+    }
+    if (recuPass !== recuPass2) {
+      setRecuError('Las contraseñas no coinciden');
+      return;
+    }
+    setRecuCargando(true);
+    try {
+      const res = await fetch(`${BASE_API}/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: resetToken, nuevaPassword: recuPass }),
+      });
+      const data = await res.json();
+      if (!res.ok) setRecuError(data.error || 'No se pudo actualizar la contraseña');
+      else {
+        setRecuMensaje(data.mensaje || 'Contraseña actualizada correctamente');
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    } catch {
+      setRecuError('No se pudo conectar con el servidor');
+    } finally {
+      setRecuCargando(false);
+    }
+  };
+
+  if (vistaRecuperar) {
+    return (
+      <main className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-4 sm:p-6">
+        <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-6 sm:p-8 space-y-6 shadow-2xl">
+          <div className="text-center space-y-1">
+            <h1 className="text-2xl font-bold tracking-tight">Organizador Académico</h1>
+            <p className="text-sm text-zinc-400">
+              {vistaRecuperar === 'olvide' ? 'Recuperá tu contraseña' : 'Elegí tu nueva contraseña'}
+            </p>
+          </div>
+
+          {recuError && (
+            <div className="bg-red-950/60 border border-red-800 text-red-300 text-xs px-3 py-2.5 rounded-lg">
+              {recuError}
+            </div>
+          )}
+
+          {recuMensaje && (
+            <div className="bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-xs px-3 py-2.5 rounded-lg">
+              {recuMensaje}
+            </div>
+          )}
+
+          {vistaRecuperar === 'olvide' && !recuMensaje && (
+            <form onSubmit={enviarRecuperacion} className="space-y-4">
+              <p className="text-xs text-zinc-400">
+                Ingresá el correo de tu cuenta y te enviamos un enlace para crear una contraseña nueva.
+              </p>
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">Correo electrónico</label>
+                <input
+                  type="email"
+                  placeholder="tu@email.com"
+                  value={recuEmail}
+                  onChange={(e) => setRecuEmail(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm"
+                  required
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={recuCargando}
+                className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white font-semibold text-sm py-2.5 rounded-lg transition cursor-pointer"
+              >
+                {recuCargando ? 'Enviando...' : 'Enviar enlace de recuperación'}
+              </button>
+            </form>
+          )}
+
+          {vistaRecuperar === 'reset' && !recuMensaje && (
+            <form onSubmit={guardarNuevaPassword} className="space-y-4">
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">Nueva contraseña</label>
+                <input
+                  type="password"
+                  placeholder="Mínimo 6 caracteres"
+                  value={recuPass}
+                  onChange={(e) => setRecuPass(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">Repetí la contraseña</label>
+                <input
+                  type="password"
+                  placeholder="Repetila"
+                  value={recuPass2}
+                  onChange={(e) => setRecuPass2(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm"
+                  required
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={recuCargando}
+                className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white font-semibold text-sm py-2.5 rounded-lg transition cursor-pointer"
+              >
+                {recuCargando ? 'Guardando...' : 'Guardar nueva contraseña'}
+              </button>
+            </form>
+          )}
+
+          <button
+            type="button"
+            onClick={cerrarRecuperacion}
+            className="w-full text-xs text-blue-400 hover:underline cursor-pointer"
+          >
+            {recuMensaje && vistaRecuperar === 'reset' ? 'Ir a iniciar sesión' : '← Volver a iniciar sesión'}
+          </button>
+        </div>
+      </main>
+    );
+  }
+
   if (!modoSesion || !usuario) {
     return (
       <main className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-4 sm:p-6">
@@ -1064,17 +1240,10 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => {
-                    const emailRecu = prompt('Ingresá tu correo electrónico para recuperar la contraseña:');
-                    if (emailRecu) {
-                      fetch(`${BASE_API}/auth/recuperar`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ email: emailRecu })
-                      })
-                      .then(res => res.json())
-                      .then(data => alert(data.mensaje || data.error))
-                      .catch(() => alert('Error al conectar con el servidor'));
-                    }
+                    setRecuEmail(authEmail);
+                    setRecuError('');
+                    setRecuMensaje('');
+                    setVistaRecuperar('olvide');
                   }}
                   className="text-blue-400 hover:underline cursor-pointer"
                 >

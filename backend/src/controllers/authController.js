@@ -2,15 +2,29 @@ const pool = require('../db');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
 
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
+// Envío de correos por la API HTTP de Brevo.
+// (Render gratis bloquea los puertos SMTP, así que Gmail/nodemailer no funciona ahí.)
+const enviarCorreo = async ({ to, subject, html }) => {
+  const resp = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      'api-key': process.env.BREVO_API_KEY
+    },
+    body: JSON.stringify({
+      sender: { name: 'Organizador Académico', email: process.env.BREVO_SENDER_EMAIL },
+      to: [{ email: to }],
+      subject,
+      htmlContent: html
+    })
+  });
+  if (!resp.ok) {
+    const detalle = await resp.text();
+    throw new Error(`Brevo respondió ${resp.status}: ${detalle}`);
   }
-});
+};
 
 const generarToken = (usuario) =>
   jwt.sign({ id: usuario.id }, process.env.JWT_SECRET, { expiresIn: '30d' });
@@ -261,10 +275,17 @@ const migrarInvitado = async (req, res) => {
 // ---------------------------------------------------------------
 const solicitarRecuperacion = async (req, res) => {
   const { email } = req.body;
+  // Mismo mensaje exista o no la cuenta, para no revelar qué correos están registrados
+  const respuestaGenerica = {
+    mensaje: 'Si el correo está registrado, te enviamos un enlace para crear una contraseña nueva. Revisá también la carpeta de spam.'
+  };
+
   try {
-    const usuario = await pool.query('SELECT * FROM usuarios WHERE email = $1', [email]);
+    if (!email) return res.status(400).json({ error: 'Ingresá tu correo electrónico' });
+
+    const usuario = await pool.query('SELECT id FROM usuarios WHERE email = $1', [email]);
     if (usuario.rows.length === 0) {
-      return res.status(404).json({ error: 'No existe una cuenta con este correo' });
+      return res.json(respuestaGenerica);
     }
 
     const tokenReseteo = crypto.randomBytes(32).toString('hex');
@@ -277,31 +298,33 @@ const solicitarRecuperacion = async (req, res) => {
 
     const linkRecuperacion = `https://organizador-academico-e5my-green.vercel.app?token=${tokenReseteo}`;
 
-    await transporter.sendMail({
-      from: `"Organizador Académico" <${process.env.EMAIL_USER}>`,
+    await enviarCorreo({
       to: email,
-      subject: 'Recuperación de Contraseña - Organizador Académico',
+      subject: 'Recuperación de contraseña - Organizador Académico',
       html: `
         <div style="font-family: Arial, sans-serif; color: #333;">
-          <h2>Recuperación de Contraseña</h2>
-          <p>Has solicitado restablecer tu contraseña en el Organizador Académico.</p>
-          <p>Hacé clic en el siguiente enlace para continuar (expira en 1 hora):</p>
-          <a href="${linkRecuperacion}" style="background: #2563eb; color: #fff; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">Restablecer Contraseña</a>
-          <p>Si no solicitaste esto, ignorá este mensaje.</p>
+          <h2>Recuperación de contraseña</h2>
+          <p>Pediste restablecer tu contraseña en el Organizador Académico.</p>
+          <p>Hacé clic en el siguiente botón para elegir una nueva (el enlace vence en 1 hora):</p>
+          <a href="${linkRecuperacion}" style="background: #2563eb; color: #fff; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">Crear nueva contraseña</a>
+          <p>Si no fuiste vos, ignorá este mensaje: tu contraseña no cambia.</p>
         </div>
       `
     });
 
-    res.json({ mensaje: 'Correo de recuperación enviado con éxito a tu bandeja de entrada' });
+    res.json(respuestaGenerica);
   } catch (err) {
-    console.error('Error al enviar correo:', err);
-    res.status(500).json({ error: 'Error al enviar el correo de recuperación' });
+    console.error('Error al enviar correo de recuperación:', err);
+    res.status(500).json({ error: 'No se pudo enviar el correo de recuperación. Probá de nuevo en unos minutos.' });
   }
 };
 
 const resetearPassword = async (req, res) => {
   const { token, nuevaPassword } = req.body;
   try {
+    if (!token || !nuevaPassword || nuevaPassword.length < 6) {
+      return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+    }
     const usuario = await pool.query(
       'SELECT * FROM usuarios WHERE token_reseteo = $1 AND expira_token > NOW()',
       [token]
