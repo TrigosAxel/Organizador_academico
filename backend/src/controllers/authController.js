@@ -11,6 +11,7 @@ const transporter = nodemailer.createTransport({
   }
 });
 
+// Registro usando password_hash
 const registrarUsuario = async (req, res) => {
   const { nombre, email, password } = req.body;
   try {
@@ -23,7 +24,7 @@ const registrarUsuario = async (req, res) => {
     const passwordHash = await bcrypt.hash(password, salt);
 
     const nuevoUsuario = await pool.query(
-      'INSERT INTO usuarios (nombre, email, password) VALUES ($1, $2, $3) RETURNING id, nombre, email, fin_cursada',
+      'INSERT INTO usuarios (nombre, email, password_hash) VALUES ($1, $2, $3) RETURNING id, nombre, email, fin_cursada',
       [nombre, email, passwordHash]
     );
 
@@ -34,6 +35,7 @@ const registrarUsuario = async (req, res) => {
   }
 };
 
+// Login usando password_hash
 const loginUsuario = async (req, res) => {
   const { email, password } = req.body;
   try {
@@ -43,11 +45,10 @@ const loginUsuario = async (req, res) => {
     }
 
     const usuario = resultado.rows[0];
-    const passwordAlmacenada = usuario.password || usuario.password_hash;
+    const passwordAlmacenada = usuario.password_hash || usuario.password;
 
-    // Validación estricta para evitar el error de arguments required
     if (!passwordAlmacenada) {
-      return res.status(400).json({ error: 'La cuenta no tiene una contraseña registrada en la base de datos' });
+      return res.status(400).json({ error: 'La cuenta no tiene una contraseña válida asignada' });
     }
 
     const passwordValida = await bcrypt.compare(password, passwordAlmacenada);
@@ -144,7 +145,7 @@ const resetearPassword = async (req, res) => {
     const passwordHash = await bcrypt.hash(nuevaPassword, salt);
 
     await pool.query(
-      'UPDATE usuarios SET password = $1, token_reseteo = NULL, expira_token = NULL WHERE id = $2',
+      'UPDATE usuarios SET password_hash = $1, token_reseteo = NULL, expira_token = NULL WHERE id = $2',
       [passwordHash, usuario.rows[0].id]
     );
 
