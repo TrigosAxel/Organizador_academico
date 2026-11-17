@@ -72,9 +72,7 @@ interface TrabajoPractico {
   descripcion?: string | null;
 }
 
-const BASE_API = process.env.NEXT_PUBLIC_API_URL 
-  ? process.env.NEXT_PUBLIC_API_URL.replace(/\/materias$/, '') 
-  : 'https://organizador-academico-6kv1.onrender.com/api';
+const BASE_API = 'https://organizador-academico-6kv1.onrender.com/api';
 
 const MESES = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
