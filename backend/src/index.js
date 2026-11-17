@@ -42,9 +42,41 @@ app.get('/api/materias', async (req, res) => {
 
 app.post('/api/materias', async (req, res) => {
   try {
-    // Lógica para insertar materia
-    res.json({ success: true, message: "Materia creada" });
+    const { 
+      nombre, 
+      anio_carrera, 
+      cuatrimestre, 
+      estado, 
+      nota_final, 
+      modalidad_aprobacion, 
+      asistencia_minima 
+    } = req.body;
+
+    // Asumimos que extraes el ID del usuario autenticado (ajustá según tu middleware de auth, ej: req.usuarioId o req.user.id)
+    const usuario_id = req.usuarioId || 1; // O el campo que use tu sistema de auth
+
+    const query = `
+      INSERT INTO materias (usuario_id, nombre, anio_carrera, cuatrimestre, estado, nota_final, modalidad_aprobacion, asistencia_minima)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING *;
+    `;
+    
+    const values = [
+      usuario_id, 
+      nombre, 
+      anio_carrera, 
+      cuatrimestre, 
+      estado || 'pendiente', 
+      nota_final || null, 
+      modalidad_aprobacion || null, 
+      asistencia_minima || 75
+    ];
+
+    const nuevaMateria = await db.query(query, values); // Asegúrate de que 'db' sea tu objeto de conexión configurado
+    res.status(201).json(nuevaMateria.rows[0]);
+
   } catch (err) {
+    console.error("Error al insertar materia:", err);
     res.status(500).json({ error: err.message });
   }
 });
