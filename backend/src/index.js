@@ -98,7 +98,7 @@ app.get('/api/correlativas', async (req, res) => {
 // --- TPS ---
 app.get('/api/tps', async (req, res) => {
   try {
-    const result = await db.query('SELECT * FROM tps');
+    const result = await db.query('SELECT * FROM trabajos_practicos');
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
