@@ -54,7 +54,7 @@ const registrarUsuario = async (req, res) => {
     const passwordHash = await bcrypt.hash(password, salt);
 
     const nuevoUsuario = await pool.query(
-      'INSERT INTO usuarios (nombre, email, password_hash) VALUES ($1, $2, $3) RETURNING id, nombre, email, fin_cursada',
+      'INSERT INTO usuarios (nombre, email, password_hash) VALUES ($1, $2, $3) RETURNING id, nombre, email, fin_cursada, carrera',
       [nombre, email, passwordHash]
     );
     const usuario = nuevoUsuario.rows[0];
@@ -101,7 +101,8 @@ const loginUsuario = async (req, res) => {
         id: usuario.id,
         nombre: usuario.nombre,
         email: usuario.email,
-        fin_cursada: usuario.fin_cursada
+        fin_cursada: usuario.fin_cursada,
+        carrera: usuario.carrera || null
       }
     });
   } catch (err) {
@@ -116,7 +117,7 @@ const loginUsuario = async (req, res) => {
 const obtenerPerfil = async (req, res) => {
   try {
     const resultado = await pool.query(
-      'SELECT id, nombre, email, fin_cursada FROM usuarios WHERE id = $1',
+      'SELECT id, nombre, email, fin_cursada, carrera FROM usuarios WHERE id = $1',
       [req.usuarioId]
     );
     if (resultado.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
@@ -134,7 +135,7 @@ const actualizarFinCursada = async (req, res) => {
   try {
     const { fin_cursada } = req.body;
     const resultado = await pool.query(
-      'UPDATE usuarios SET fin_cursada = $1 WHERE id = $2 RETURNING id, nombre, email, fin_cursada',
+      'UPDATE usuarios SET fin_cursada = $1 WHERE id = $2 RETURNING id, nombre, email, fin_cursada, carrera',
       [nn(fin_cursada) || null, req.usuarioId]
     );
     if (resultado.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
@@ -142,6 +143,24 @@ const actualizarFinCursada = async (req, res) => {
   } catch (err) {
     console.error('Error al actualizar fin de cursada:', err);
     res.status(500).json({ error: 'Error al actualizar la fecha de fin de cursada' });
+  }
+};
+
+// ---------------------------------------------------------------
+// CARRERA (requiere token)
+// ---------------------------------------------------------------
+const actualizarCarrera = async (req, res) => {
+  try {
+    const carrera = String(req.body.carrera || '').trim().slice(0, 120);
+    const resultado = await pool.query(
+      'UPDATE usuarios SET carrera = $1 WHERE id = $2 RETURNING id, nombre, email, fin_cursada, carrera',
+      [carrera || null, req.usuarioId]
+    );
+    if (resultado.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
+    res.json({ mensaje: 'Carrera actualizada', usuario: resultado.rows[0] });
+  } catch (err) {
+    console.error('Error al actualizar carrera:', err);
+    res.status(500).json({ error: 'Error al guardar la carrera' });
   }
 };
 
@@ -159,7 +178,8 @@ const migrarInvitado = async (req, res) => {
     examenes = [],
     tps = [],
     correlativas = [],
-    fin_cursada
+    fin_cursada,
+    carrera
   } = req.body || {};
   const uid = req.usuarioId;
 
@@ -255,8 +275,11 @@ const migrarInvitado = async (req, res) => {
       }
     }
 
-    if (fin_cursada) {
-      await client.query('UPDATE usuarios SET fin_cursada = $1 WHERE id = $2', [fin_cursada, uid]);
+    if (fin_cursada || carrera) {
+      await client.query(
+        'UPDATE usuarios SET fin_cursada = COALESCE($1, fin_cursada), carrera = COALESCE($2, carrera) WHERE id = $3',
+        [fin_cursada || null, carrera ? String(carrera).slice(0, 120) : null, uid]
+      );
     }
 
     await client.query('COMMIT');
@@ -353,6 +376,7 @@ module.exports = {
   loginUsuario,
   obtenerPerfil,
   actualizarFinCursada,
+  actualizarCarrera,
   migrarInvitado,
   solicitarRecuperacion,
   resetearPassword

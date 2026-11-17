@@ -9,6 +9,7 @@ const {
   loginUsuario,
   obtenerPerfil,
   actualizarFinCursada,
+  actualizarCarrera,
   migrarInvitado,
   solicitarRecuperacion,
   resetearPassword
@@ -37,6 +38,7 @@ app.post('/api/auth/reset-password', resetearPassword);
 // Rutas que requieren token
 app.get('/api/auth/me', requireAuth, obtenerPerfil);
 app.put('/api/auth/fin-cursada', requireAuth, actualizarFinCursada);
+app.put('/api/auth/carrera', requireAuth, actualizarCarrera);
 app.post('/api/auth/migrar-invitado', requireAuth, migrarInvitado);
 
 // Todo lo que se define de acá para abajo (materias, horarios, etc.) exige token
@@ -150,6 +152,51 @@ function crud(ruta, tabla, normalizar = (b) => b, conJoin = true) {
 // ---------------------------------------------------------------
 // MATERIAS
 // ---------------------------------------------------------------
+
+// Borra una materia (o todas las del usuario) junto con lo que depende de ellas:
+// correlativas, horarios, exámenes y TPs. Todo en una transacción.
+// Se registra ANTES que crud('materias') para que estas rutas tengan prioridad.
+async function borrarMaterias(uid, materiaId = null) {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const r = materiaId
+      ? await client.query('SELECT id FROM materias WHERE usuario_id = $1 AND id = $2', [uid, materiaId])
+      : await client.query('SELECT id FROM materias WHERE usuario_id = $1', [uid]);
+    const ids = r.rows.map((x) => x.id);
+    if (ids.length) {
+      await client.query('DELETE FROM correlativas WHERE materia_id = ANY($1) OR correlativa_id = ANY($1)', [ids]);
+      await client.query('DELETE FROM horarios WHERE materia_id = ANY($1)', [ids]);
+      await client.query('DELETE FROM examenes WHERE materia_id = ANY($1)', [ids]);
+      await client.query('DELETE FROM trabajos_practicos WHERE materia_id = ANY($1)', [ids]);
+      await client.query('DELETE FROM materias WHERE id = ANY($1)', [ids]);
+    }
+    await client.query('COMMIT');
+    return ids.length;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+app.delete('/api/materias/:id', async (req, res) => {
+  try {
+    const n = await borrarMaterias(usuarioId(req), req.params.id);
+    if (!n) return res.status(404).json({ error: 'No encontrado' });
+    res.json({ mensaje: 'Eliminada' });
+  } catch (err) { responderError(res, err); }
+});
+
+// Resetear: borra TODAS las materias del usuario (y lo que depende de ellas)
+app.delete('/api/materias', async (req, res) => {
+  try {
+    const n = await borrarMaterias(usuarioId(req));
+    res.json({ mensaje: 'Materias eliminadas', eliminadas: n });
+  } catch (err) { responderError(res, err); }
+});
+
 crud('materias', 'materias', (b, esNueva) => {
   const out = { ...b };
   if (out.estado) out.estado = String(out.estado).toLowerCase();

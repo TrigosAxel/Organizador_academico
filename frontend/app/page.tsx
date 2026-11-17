@@ -13,6 +13,7 @@ interface Usuario {
   nombre: string;
   email: string;
   fin_cursada: string | null;
+  carrera?: string | null;
 }
 
 interface Materia {
@@ -128,6 +129,27 @@ export default function Home() {
   const [recuError, setRecuError] = useState('');
   const [recuMensaje, setRecuMensaje] = useState('');
   const [recuCargando, setRecuCargando] = useState(false);
+
+  // Edición de materia, reseteo de materias y carrera
+  const [materiaEditando, setMateriaEditando] = useState<Materia | null>(null);
+  const [formEdit, setFormEdit] = useState({
+    nombre: '',
+    anio_carrera: '1',
+    cuatrimestre: '1ro',
+    estado: 'pendiente',
+    nota_final: '',
+    modalidad_aprobacion: 'promocionada',
+    asistencia_minima: '75',
+    clases_totales: '0',
+    inasistencias: '0',
+  });
+  const [errorEdit, setErrorEdit] = useState('');
+  const [mostrarReset, setMostrarReset] = useState(false);
+  const [textoReset, setTextoReset] = useState('');
+  const [errorReset, setErrorReset] = useState('');
+  const [reseteando, setReseteando] = useState(false);
+  const [editandoCarrera, setEditandoCarrera] = useState(false);
+  const [inputCarrera, setInputCarrera] = useState('');
 
   const [mostrarModalMigracion, setMostrarModalMigracion] = useState(false);
   const [migrando, setMigrando] = useState(false);
@@ -347,6 +369,7 @@ export default function Home() {
             tps,
             correlativas,
             fin_cursada: usuario?.fin_cursada || null,
+            carrera: usuario?.carrera || null,
           }),
         });
         localStorage.removeItem('organizador_guest_data');
@@ -439,7 +462,7 @@ export default function Home() {
         </head>
         <body>
           <h1>Resumen de Avance Académico</h1>
-          <p>Estudiante: <strong>${usuario?.nombre}</strong> · Fecha: ${new Date().toLocaleDateString()}</p>
+          <p>Estudiante: <strong>${usuario?.nombre}</strong>${usuario?.carrera ? ` · Carrera: <strong>${usuario.carrera}</strong>` : ''} · Fecha: ${new Date().toLocaleDateString()}</p>
           <div class="resumen">
             <div><strong>Materias Aprobadas:</strong> ${aprobadas.length} / ${materias.length} (${porcentajeCarrera}%)</div>
             <div><strong>Promedio General:</strong> ${promedio}</div>
@@ -596,6 +619,118 @@ export default function Home() {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
     });
+    cargarDatosAuth(token);
+  };
+
+  const abrirEdicion = (m: Materia) => {
+    setErrorEdit('');
+    setMateriaEditando(m);
+    setFormEdit({
+      nombre: m.nombre,
+      anio_carrera: String(m.anio_carrera ?? m.anio ?? 1),
+      cuatrimestre: String(m.cuatrimestre),
+      estado: m.estado,
+      nota_final: m.nota_final !== null && m.nota_final !== undefined ? String(m.nota_final) : '',
+      modalidad_aprobacion: m.modalidad_aprobacion || 'promocionada',
+      asistencia_minima: String(m.asistencia_minima ?? 75),
+      clases_totales: String(m.clases_totales ?? 0),
+      inasistencias: String(m.inasistencias ?? 0),
+    });
+  };
+
+  const setCampoEdit = (campo: keyof typeof formEdit, valor: string) =>
+    setFormEdit((prev) => ({ ...prev, [campo]: valor }));
+
+  const guardarEdicion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!materiaEditando) return;
+
+    const nombreLimpio = formEdit.nombre.trim();
+    const anio = Number(formEdit.anio_carrera);
+    const asistMin = Number(formEdit.asistencia_minima);
+    const clases = Number(formEdit.clases_totales);
+    const faltas = Number(formEdit.inasistencias);
+    const aprobada = formEdit.estado === 'aprobada';
+    const nota = formEdit.nota_final === '' ? null : Number(formEdit.nota_final);
+
+    if (!nombreLimpio) return setErrorEdit('El nombre no puede estar vacío');
+    if (!Number.isInteger(anio) || anio < 1 || anio > 6) return setErrorEdit('El año debe ser de 1 a 6');
+    if (Number.isNaN(asistMin) || asistMin < 0 || asistMin > 100)
+      return setErrorEdit('La asistencia mínima debe estar entre 0 y 100');
+    if (!Number.isInteger(clases) || clases < 0) return setErrorEdit('Las clases totales no pueden ser negativas');
+    if (!Number.isInteger(faltas) || faltas < 0 || faltas > clases)
+      return setErrorEdit('Las inasistencias no pueden superar las clases totales');
+    if (aprobada && nota !== null && (Number.isNaN(nota) || nota < 1 || nota > 10))
+      return setErrorEdit('La nota debe estar entre 1 y 10');
+
+    await actualizarMateria({
+      ...materiaEditando,
+      nombre: nombreLimpio,
+      anio_carrera: anio,
+      cuatrimestre: formEdit.cuatrimestre,
+      estado: formEdit.estado as Materia['estado'],
+      nota_final: aprobada ? nota : null,
+      modalidad_aprobacion: aprobada ? formEdit.modalidad_aprobacion : null,
+      asistencia_minima: asistMin,
+      clases_totales: clases,
+      inasistencias: faltas,
+    });
+    setMateriaEditando(null);
+  };
+
+  const resetearMaterias = async () => {
+    setErrorReset('');
+    setReseteando(true);
+    try {
+      if (modoSesion === 'guest') {
+        setMaterias([]);
+        setHorarios([]);
+        setExamenes([]);
+        setTps([]);
+        setCorrelativas([]);
+        guardarGuestLocal({ materias: [], horarios: [], examenes: [], tps: [], correlativas: [] });
+      } else {
+        if (!token) return;
+        const res = await fetch(`${BASE_API}/materias`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setErrorReset(data.error || 'No se pudieron borrar las materias');
+          return;
+        }
+        await cargarDatosAuth(token);
+      }
+      setMostrarReset(false);
+      setTextoReset('');
+    } catch {
+      setErrorReset('No se pudo conectar con el servidor');
+    } finally {
+      setReseteando(false);
+    }
+  };
+
+  const guardarCarrera = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!usuario) return;
+    const carrera = inputCarrera.trim().slice(0, 120);
+
+    if (modoSesion === 'guest') {
+      const nuevoU = { ...usuario, carrera: carrera || null };
+      setUsuario(nuevoU);
+      guardarGuestLocal({ usuario: nuevoU });
+      setEditandoCarrera(false);
+      return;
+    }
+
+    if (!token) return;
+    await fetch(`${BASE_API}/auth/carrera`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ carrera }),
+    });
+    setEditandoCarrera(false);
     cargarDatosAuth(token);
   };
 
@@ -1369,6 +1504,44 @@ export default function Home() {
                 Modo Invitado
               </span>
             )}
+            {editandoCarrera ? (
+              <form onSubmit={guardarCarrera} className="flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Ej: Lic. en Sistemas de Información"
+                  value={inputCarrera}
+                  onChange={(e) => setInputCarrera(e.target.value)}
+                  maxLength={120}
+                  autoFocus
+                  className="bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-100 w-64 max-w-full"
+                />
+                <button
+                  type="submit"
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium px-3 py-1.5 rounded-lg cursor-pointer"
+                >
+                  Guardar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditandoCarrera(false)}
+                  className="bg-zinc-800 text-zinc-300 text-xs px-3 py-1.5 rounded-lg cursor-pointer"
+                >
+                  Cancelar
+                </button>
+              </form>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setInputCarrera(usuario.carrera || '');
+                  setEditandoCarrera(true);
+                }}
+                title="Tocá para cambiar tu carrera"
+                className="text-xs bg-zinc-800/70 hover:bg-zinc-800 text-zinc-300 border border-zinc-700 px-2.5 py-1 rounded-full cursor-pointer transition"
+              >
+                🎓 {usuario.carrera || 'Definir mi carrera'} ✎
+              </button>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
@@ -1391,6 +1564,215 @@ export default function Home() {
             </button>
           </div>
         </div>
+
+        {materiaEditando && (
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <form
+              onSubmit={guardarEdicion}
+              className="w-full max-w-lg bg-zinc-900 border border-zinc-700 rounded-2xl p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <h2 className="text-lg font-bold text-white">Editar materia</h2>
+                <button
+                  type="button"
+                  onClick={() => setMateriaEditando(null)}
+                  className="text-zinc-400 hover:text-white cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {errorEdit && (
+                <div className="bg-red-950/60 border border-red-800 text-red-300 text-xs px-3 py-2.5 rounded-lg">
+                  {errorEdit}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">Nombre</label>
+                <input
+                  type="text"
+                  value={formEdit.nombre}
+                  onChange={(e) => setCampoEdit('nombre', e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Año de la carrera</label>
+                  <select
+                    value={formEdit.anio_carrera}
+                    onChange={(e) => setCampoEdit('anio_carrera', e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  >
+                    {[1, 2, 3, 4, 5, 6].map((a) => (
+                      <option key={a} value={a}>
+                        {a}° Año
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Cuatrimestre</label>
+                  <select
+                    value={formEdit.cuatrimestre}
+                    onChange={(e) => setCampoEdit('cuatrimestre', e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  >
+                    <option value="1ro">1ro</option>
+                    <option value="2do">2do</option>
+                    <option value="Anual">Anual</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">Estado</label>
+                <select
+                  value={formEdit.estado}
+                  onChange={(e) => setCampoEdit('estado', e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                >
+                  <option value="pendiente">Pendiente</option>
+                  <option value="cursando">Cursando</option>
+                  <option value="regular">Regular</option>
+                  <option value="aprobada">Aprobada</option>
+                  <option value="desaprobada">Desaprobada</option>
+                </select>
+              </div>
+
+              {formEdit.estado === 'aprobada' && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-zinc-400 mb-1">Nota final (1 a 10)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="1"
+                      max="10"
+                      value={formEdit.nota_final}
+                      onChange={(e) => setCampoEdit('nota_final', e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-zinc-400 mb-1">Cómo la aprobaste</label>
+                    <select
+                      value={formEdit.modalidad_aprobacion}
+                      onChange={(e) => setCampoEdit('modalidad_aprobacion', e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                    >
+                      <option value="promocionada">Promocionada</option>
+                      <option value="final">Por final</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Asist. mínima %</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={formEdit.asistencia_minima}
+                    onChange={(e) => setCampoEdit('asistencia_minima', e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Clases totales</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={formEdit.clases_totales}
+                    onChange={(e) => setCampoEdit('clases_totales', e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Inasistencias</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={formEdit.inasistencias}
+                    onChange={(e) => setCampoEdit('inasistencias', e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="submit"
+                  className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm py-2.5 rounded-lg transition cursor-pointer"
+                >
+                  Guardar cambios
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMateriaEditando(null)}
+                  className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm px-4 py-2.5 rounded-lg cursor-pointer"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {mostrarReset && (
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-zinc-900 border border-red-900/70 rounded-2xl p-6 space-y-4 shadow-2xl">
+              <h2 className="text-lg font-bold text-red-400">¿Borrar todas las materias?</h2>
+              <p className="text-sm text-zinc-300">
+                Vas a borrar tus <strong>{materias.length}</strong> materias y también todo lo que
+                depende de ellas: horarios, exámenes, TPs y correlativas. Esta acción no se puede
+                deshacer.
+              </p>
+
+              {errorReset && (
+                <div className="bg-red-950/60 border border-red-800 text-red-300 text-xs px-3 py-2.5 rounded-lg">
+                  {errorReset}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">
+                  Para confirmar, escribí <span className="font-mono text-red-400">BORRAR</span>
+                </label>
+                <input
+                  type="text"
+                  value={textoReset}
+                  onChange={(e) => setTextoReset(e.target.value)}
+                  autoFocus
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={resetearMaterias}
+                  disabled={textoReset.trim().toUpperCase() !== 'BORRAR' || reseteando}
+                  className="flex-1 bg-red-600 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold text-sm py-2.5 rounded-lg transition cursor-pointer"
+                >
+                  {reseteando ? 'Borrando...' : 'Sí, borrar todo'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMostrarReset(false)}
+                  className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm px-4 py-2.5 rounded-lg cursor-pointer"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {mostrarModalMigracion && (
           <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -1631,7 +2013,20 @@ export default function Home() {
 
         {tab === 'materias' && (
           <div className="space-y-6">
-            <div className="flex justify-end">
+            <div className="flex flex-wrap justify-end gap-2">
+              {materias.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setErrorReset('');
+                    setTextoReset('');
+                    setMostrarReset(true);
+                  }}
+                  className="text-xs bg-zinc-900 hover:bg-red-950/60 text-red-400 border border-red-900/60 px-3.5 py-2 rounded-lg font-medium cursor-pointer"
+                >
+                  🗑 Borrar todas las materias
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setMostrarImportador(!mostrarImportador)}
@@ -1899,7 +2294,13 @@ export default function Home() {
                               </span>
                             )}
                           </div>
-                          <h2 className="text-base sm:text-lg font-semibold mt-1.5">{m.nombre}</h2>
+                          <h2
+                            onClick={() => abrirEdicion(m)}
+                            title="Tocá para editar la materia"
+                            className="text-base sm:text-lg font-semibold mt-1.5 cursor-pointer hover:text-blue-400 transition"
+                          >
+                            {m.nombre}
+                          </h2>
                         </div>
 
                         <div className="flex items-center justify-end gap-2">
@@ -1914,6 +2315,13 @@ export default function Home() {
                             <option value="aprobada">Aprobada</option>
                             <option value="desaprobada">Desaprobada</option>
                           </select>
+                          <button
+                            onClick={() => abrirEdicion(m)}
+                            title="Editar materia"
+                            className="text-zinc-500 hover:text-blue-400 p-1.5 rounded-lg hover:bg-zinc-800 cursor-pointer"
+                          >
+                            ✎
+                          </button>
                           <button
                             onClick={() => eliminarMateria(m.id)}
                             className="text-zinc-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-zinc-800 cursor-pointer"
