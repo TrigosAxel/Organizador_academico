@@ -478,7 +478,7 @@ export default function Home() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         nombre: nombre.trim(),
-        anio_carrera: Number(anioCarrera),
+      anio_carrera: parseInt(String(anioCarrera)) || 1,
         cuatrimestre,
         estado,
         nota_final: estado === 'aprobada' && notaFinal ? Number(notaFinal) : null,
