@@ -3,6 +3,7 @@ const cors = require('cors');
 require('dotenv').config();
 
 const db = require('./db');
+const requireAuth = require('./middleware/auth');
 const {
   registrarUsuario,
   loginUsuario,
@@ -16,27 +17,37 @@ const {
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+if (!process.env.JWT_SECRET) {
+  console.error('Falta la variable de entorno JWT_SECRET. El servidor no puede iniciar.');
+  process.exit(1);
+}
+
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
 // ---------------------------------------------------------------
 // AUTENTICACIÓN
 // ---------------------------------------------------------------
+// Rutas públicas
 app.post('/api/auth/register', registrarUsuario);
 app.post('/api/auth/login', loginUsuario);
-app.get('/api/auth/me', obtenerPerfil);
-app.put('/api/auth/fin-cursada', actualizarFinCursada);
-app.post('/api/auth/migrar-invitado', migrarInvitado);
 app.post('/api/auth/recuperar', solicitarRecuperacion);
 app.post('/api/auth/reset-password', resetearPassword);
+
+// Rutas que requieren token
+app.get('/api/auth/me', requireAuth, obtenerPerfil);
+app.put('/api/auth/fin-cursada', requireAuth, actualizarFinCursada);
+app.post('/api/auth/migrar-invitado', requireAuth, migrarInvitado);
+
+// Todo lo que se define de acá para abajo (materias, horarios, etc.) exige token
+app.use('/api', requireAuth);
 
 // ---------------------------------------------------------------
 // HELPERS
 // ---------------------------------------------------------------
 
-// TODO: hoy el login devuelve un token fijo, así que no se sabe quién es
-// el usuario. Cuando agregues JWT, reemplazá esto por req.usuarioId real.
-const usuarioId = (req) => req.usuarioId || 1;
+// El id sale del token JWT (lo carga el middleware requireAuth)
+const usuarioId = (req) => req.usuarioId;
 
 const PROTEGIDAS = ['id', 'usuario_id', 'created_at'];
 const cacheColumnas = {};

@@ -1,6 +1,7 @@
 const pool = require('../db');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 
 const transporter = nodemailer.createTransport({
@@ -11,11 +12,26 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-// Registro usando password_hash
+const generarToken = (usuario) =>
+  jwt.sign({ id: usuario.id }, process.env.JWT_SECRET, { expiresIn: '30d' });
+
+// '' o undefined -> null (para columnas numéricas y de fecha)
+const nn = (v) => (v === '' || v === undefined ? null : v);
+
+// ---------------------------------------------------------------
+// REGISTRO
+// ---------------------------------------------------------------
 const registrarUsuario = async (req, res) => {
   const { nombre, email, password } = req.body;
   try {
-    const usuarioExistente = await pool.query('SELECT * FROM usuarios WHERE email = $1', [email]);
+    if (!nombre || !email || !password) {
+      return res.status(400).json({ error: 'Completá nombre, correo y contraseña' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+    }
+
+    const usuarioExistente = await pool.query('SELECT id FROM usuarios WHERE email = $1', [email]);
     if (usuarioExistente.rows.length > 0) {
       return res.status(400).json({ error: 'El correo ya está registrado' });
     }
@@ -27,15 +43,23 @@ const registrarUsuario = async (req, res) => {
       'INSERT INTO usuarios (nombre, email, password_hash) VALUES ($1, $2, $3) RETURNING id, nombre, email, fin_cursada',
       [nombre, email, passwordHash]
     );
+    const usuario = nuevoUsuario.rows[0];
 
-    res.status(201).json({ mensaje: 'Usuario registrado con éxito', usuario: nuevoUsuario.rows[0] });
+    // Ahora también devuelve el token, así el frontend entra directo después de registrarse
+    res.status(201).json({
+      mensaje: 'Usuario registrado con éxito',
+      token: generarToken(usuario),
+      usuario
+    });
   } catch (err) {
     console.error('Error en registro:', err);
     res.status(500).json({ error: 'Error en el servidor al registrar' });
   }
 };
 
-// Login usando password_hash
+// ---------------------------------------------------------------
+// LOGIN
+// ---------------------------------------------------------------
 const loginUsuario = async (req, res) => {
   const { email, password } = req.body;
   try {
@@ -58,7 +82,7 @@ const loginUsuario = async (req, res) => {
 
     res.json({
       mensaje: 'Login exitoso',
-      token: 'token_sesion_activo',
+      token: generarToken(usuario),
       usuario: {
         id: usuario.id,
         nombre: usuario.nombre,
@@ -72,24 +96,169 @@ const loginUsuario = async (req, res) => {
   }
 };
 
+// ---------------------------------------------------------------
+// PERFIL (requiere token)
+// ---------------------------------------------------------------
 const obtenerPerfil = async (req, res) => {
   try {
-    const resultado = await pool.query('SELECT id, nombre, email, fin_cursada FROM usuarios LIMIT 1');
+    const resultado = await pool.query(
+      'SELECT id, nombre, email, fin_cursada FROM usuarios WHERE id = $1',
+      [req.usuarioId]
+    );
     if (resultado.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
     res.json(resultado.rows[0]);
   } catch (err) {
+    console.error('Error al obtener perfil:', err);
     res.status(500).json({ error: 'Error al obtener perfil' });
   }
 };
 
+// ---------------------------------------------------------------
+// FIN DE CURSADA (requiere token)
+// ---------------------------------------------------------------
 const actualizarFinCursada = async (req, res) => {
-  res.json({ mensaje: 'Actualizado' });
+  try {
+    const { fin_cursada } = req.body;
+    const resultado = await pool.query(
+      'UPDATE usuarios SET fin_cursada = $1 WHERE id = $2 RETURNING id, nombre, email, fin_cursada',
+      [nn(fin_cursada) || null, req.usuarioId]
+    );
+    if (resultado.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
+    res.json({ mensaje: 'Fin de cursada actualizado', usuario: resultado.rows[0] });
+  } catch (err) {
+    console.error('Error al actualizar fin de cursada:', err);
+    res.status(500).json({ error: 'Error al actualizar la fecha de fin de cursada' });
+  }
 };
 
+// ---------------------------------------------------------------
+// MIGRAR DATOS DE INVITADO (requiere token)
+// En modo invitado los ids son números inventados (Date.now()), así que
+// primero se crean las materias y se arma un mapa id viejo -> id nuevo
+// para poder enganchar horarios, exámenes, TPs y correlativas.
+// Todo va en una transacción: o se guarda todo o no se guarda nada.
+// ---------------------------------------------------------------
 const migrarInvitado = async (req, res) => {
-  res.json({ mensaje: 'Migrado' });
+  const {
+    materias = [],
+    horarios = [],
+    examenes = [],
+    tps = [],
+    correlativas = [],
+    fin_cursada
+  } = req.body || {};
+  const uid = req.usuarioId;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const mapa = new Map(); // id de invitado -> id nuevo en la BD
+
+    for (const m of materias) {
+      if (!m.nombre) continue;
+      const r = await client.query(
+        `INSERT INTO materias
+           (usuario_id, nombre, anio_carrera, cuatrimestre, estado, nota_final,
+            modalidad_aprobacion, clases_totales, inasistencias, asistencia_minima)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+        [
+          uid,
+          m.nombre,
+          m.anio_carrera ?? m.anio ?? 1,
+          String(m.cuatrimestre ?? '1ro'),
+          m.estado ? String(m.estado).toLowerCase() : 'pendiente',
+          nn(m.nota_final),
+          m.modalidad_aprobacion ? String(m.modalidad_aprobacion).toLowerCase() : null,
+          m.clases_totales ?? 0,
+          m.inasistencias ?? 0,
+          m.asistencia_minima ?? 75
+        ]
+      );
+      mapa.set(m.id, r.rows[0].id);
+    }
+
+    for (const h of horarios) {
+      const materiaId = mapa.get(h.materia_id);
+      if (!materiaId || !h.dia_semana || !h.hora_inicio || !h.hora_fin) continue;
+      await client.query(
+        `INSERT INTO horarios (usuario_id, materia_id, dia_semana, hora_inicio, hora_fin, aula)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [uid, materiaId, h.dia_semana, h.hora_inicio, h.hora_fin, nn(h.aula)]
+      );
+    }
+
+    for (const e of examenes) {
+      const materiaId = mapa.get(e.materia_id);
+      if (!materiaId || !e.titulo || !e.fecha) continue;
+      await client.query(
+        `INSERT INTO examenes
+           (usuario_id, materia_id, titulo, fecha, nota_intento_1, nota_intento_2,
+            nota_vigente, condicion, notas_estudio)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          uid, materiaId, e.titulo, e.fecha,
+          nn(e.nota_intento_1), nn(e.nota_intento_2), nn(e.nota_vigente),
+          nn(e.condicion), nn(e.notas_estudio)
+        ]
+      );
+    }
+
+    for (const t of tps) {
+      const materiaId = mapa.get(t.materia_id);
+      if (!materiaId || !t.titulo || !t.fecha_entrega) continue;
+      await client.query(
+        `INSERT INTO trabajos_practicos
+           (usuario_id, materia_id, titulo, fecha_entrega, estado, nota, descripcion)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [uid, materiaId, t.titulo, t.fecha_entrega, t.estado || 'pendiente', nn(t.nota), nn(t.descripcion)]
+      );
+    }
+
+    // La tabla correlativas puede o no tener usuario_id: se revisa antes de insertar
+    const infoCol = await client.query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'correlativas' AND column_name = 'usuario_id'`
+    );
+    const conUsuario = infoCol.rows.length > 0;
+
+    for (const c of correlativas) {
+      const materiaId = mapa.get(c.materia_id);
+      const correlativaId = mapa.get(c.correlativa_id);
+      if (!materiaId || !correlativaId) continue;
+      if (conUsuario) {
+        await client.query(
+          `INSERT INTO correlativas (usuario_id, materia_id, correlativa_id, tipo_requisito)
+           VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+          [uid, materiaId, correlativaId, c.tipo_requisito || 'regular']
+        );
+      } else {
+        await client.query(
+          `INSERT INTO correlativas (materia_id, correlativa_id, tipo_requisito)
+           VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+          [materiaId, correlativaId, c.tipo_requisito || 'regular']
+        );
+      }
+    }
+
+    if (fin_cursada) {
+      await client.query('UPDATE usuarios SET fin_cursada = $1 WHERE id = $2', [fin_cursada, uid]);
+    }
+
+    await client.query('COMMIT');
+    res.json({ mensaje: 'Datos migrados con éxito', materias_migradas: mapa.size });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error al migrar datos de invitado:', err);
+    res.status(500).json({ error: 'No se pudieron migrar los datos', detail: err.message });
+  } finally {
+    client.release();
+  }
 };
 
+// ---------------------------------------------------------------
+// RECUPERACIÓN DE CONTRASEÑA
+// ---------------------------------------------------------------
 const solicitarRecuperacion = async (req, res) => {
   const { email } = req.body;
   try {
@@ -97,7 +266,7 @@ const solicitarRecuperacion = async (req, res) => {
     if (usuario.rows.length === 0) {
       return res.status(404).json({ error: 'No existe una cuenta con este correo' });
     }
-    
+
     const tokenReseteo = crypto.randomBytes(32).toString('hex');
     const expiracion = new Date(Date.now() + 3600000);
 
