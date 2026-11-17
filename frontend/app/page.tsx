@@ -128,7 +128,6 @@ export default function Home() {
   const [editandoFin, setEditandoFin] = useState(false);
   const [inputFinCursada, setInputFinCursada] = useState('');
   
-  // Estados iniciales estáticos seguros para Vercel (SSR)
   const [ahora, setAhora] = useState<number>(0);
   const [mesActual, setMesActual] = useState({ anio: 2026, mes: 10 });
   
@@ -1060,7 +1059,28 @@ export default function Home() {
             </div>
 
             <div>
-              <label className="block text-xs text-zinc-400 mb-1">Contraseña</label>
+              <div className="flex items-center justify-between text-xs mb-1">
+                <label className="text-zinc-400">Contraseña</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const emailRecu = prompt('Ingresá tu correo electrónico para recuperar la contraseña:');
+                    if (emailRecu) {
+                      fetch(`${BASE_API}/auth/recuperar`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email: emailRecu })
+                      })
+                      .then(res => res.json())
+                      .then(data => alert(data.mensaje || data.error))
+                      .catch(() => alert('Error al conectar con el servidor'));
+                    }
+                  }}
+                  className="text-blue-400 hover:underline cursor-pointer"
+                >
+                  ¿Olvidaste tu contraseña?
+                </button>
+              </div>
               <input
                 type="password"
                 placeholder="••••••••"
@@ -1078,6 +1098,31 @@ export default function Home() {
               {modoAuth === 'login' ? 'Entrar con mi cuenta' : 'Registrarme'}
             </button>
           </form>
+
+          {/* Botones sociales de Google y Apple */}
+          <div className="space-y-3 mt-4">
+            <div className="relative flex py-2 items-center">
+              <div className="flex-grow border-t border-zinc-800"></div>
+              <span className="flex-shrink mx-3 text-xs text-zinc-500">o continuar con</span>
+              <div className="flex-grow border-t border-zinc-800"></div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => alert('Integrando Google OAuth...')}
+              className="w-full bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 text-sm font-medium py-2.5 rounded-lg flex items-center justify-center gap-2 transition cursor-pointer"
+            >
+              <span>🌐</span> Continuar con Google
+            </button>
+
+            <button
+              type="button"
+              onClick={() => alert('Integrando Apple Sign In...')}
+              className="w-full bg-black hover:bg-zinc-900 border border-zinc-700 text-white text-sm font-medium py-2.5 rounded-lg flex items-center justify-center gap-2 transition cursor-pointer"
+            >
+              <span></span> Continuar con Apple
+            </button>
+          </div>
 
           <div className="relative flex py-1 items-center">
             <div className="flex-grow border-t border-zinc-800"></div>
