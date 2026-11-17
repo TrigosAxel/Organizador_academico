@@ -65,11 +65,11 @@ const values = [
       usuario_id, 
       nombre, 
       anio_carrera, 
-      cuatrimestre ? cuatrimestre.toLowerCase() : 'anual', 
+      cuatrimestre || 'Anual', // 👈 Sin .toLowerCase() para que respete 'Anual'
       estado ? estado.toLowerCase() : 'pendiente', 
       nota_final || null, 
       modalidad_aprobacion ? modalidad_aprobacion.toLowerCase() : null, 
-      asistencia_minima || 0
+      asistencia_minima || 75
     ];
     // Nota: Si tu archivo db.js exporta 'pool' en lugar de 'db', cambia db.query por pool.query
     const nuevaMateria = await db.query(query, values);
