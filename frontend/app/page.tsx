@@ -111,11 +111,20 @@ export default function Home() {
   const [verificandoSesion, setVerificandoSesion] = useState(true);
 
   // Recuperación de contraseña (pantallas propias)
-  const [vistaRecuperar, setVistaRecuperar] = useState<'olvide' | 'reset' | null>(null);
+  // Si llega desde el link del mail (?token=...), arranca directo en la pantalla de nueva contraseña
+  const [vistaRecuperar, setVistaRecuperar] = useState<'olvide' | 'reset' | null>(() =>
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('token')
+      ? 'reset'
+      : null
+  );
   const [recuEmail, setRecuEmail] = useState('');
   const [recuPass, setRecuPass] = useState('');
   const [recuPass2, setRecuPass2] = useState('');
-  const [resetToken, setResetToken] = useState('');
+  const [resetToken, setResetToken] = useState(() =>
+    typeof window === 'undefined'
+      ? ''
+      : new URLSearchParams(window.location.search).get('token') || ''
+  );
   const [recuError, setRecuError] = useState('');
   const [recuMensaje, setRecuMensaje] = useState('');
   const [recuCargando, setRecuCargando] = useState(false);
@@ -224,15 +233,6 @@ export default function Home() {
     if (Array.isArray(dataCorr)) setCorrelativas(dataCorr);
     if (Array.isArray(dataExam)) setExamenes(dataExam);
     if (Array.isArray(dataTps)) setTps(dataTps);
-  }, []);
-
-  // Si el usuario llega desde el link del mail (?token=...), se abre la pantalla de nueva contraseña
-  useEffect(() => {
-    const t = new URLSearchParams(window.location.search).get('token');
-    if (t) {
-      setResetToken(t);
-      setVistaRecuperar('reset');
-    }
   }, []);
 
   useEffect(() => {
