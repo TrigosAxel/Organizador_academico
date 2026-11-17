@@ -1,6 +1,12 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { createClient } from '@supabase/supabase-js';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+);
 
 interface Usuario {
   id: number;
@@ -12,38 +18,39 @@ interface Usuario {
 interface Materia {
   id: number;
   nombre: string;
-  anio_carrera: number;
-  cuatrimestre: string;
-  estado: 'pendiente' | 'cursando' | 'regular' | 'aprobada' | 'desaprobada';
-  nota_final: number | null;
-  modalidad_aprobacion: 'promocionada' | 'final' | null;
+  año?: number;
+  anio?: number;
+  cuatrimestre: number | string;
+  estado: string;
   clases_totales: number;
+  anio_carrera?: number;
   inasistencias: number;
-  asistencia_minima: number;
+  modalidad_aprobacion?: string | null;
+  nota_final?: number | null;
+  asistencia_minima?: number;
 }
-
 interface Horario {
-  id: number;
+  id?: number;
   materia_id: number;
   materia_nombre: string;
-  dia_semana: 'Lunes' | 'Martes' | 'Miércoles' | 'Jueves' | 'Viernes' | 'Sábado';
+  dia?: string;
+  dia_semana?: string;
   hora_inicio: string;
   hora_fin: string;
   aula: string | null;
 }
-
 interface Correlativa {
+  id?: number;
   materia_id: number;
   correlativa_id: number;
-  tipo_requisito: 'regular' | 'aprobada';
-  materia_nombre: string;
-  correlativa_nombre: string;
-  correlativa_estado: string;
+  correlativa_estado?: string;
+  tipo_requisito?: string;
+  correlativa_nombre?: string;
+  materia_nombre?: string;
 }
-
 interface Examen {
-  id: number;
-  materia_id: number;
+  id?: number;
+  materia_id?: number;
   materia_nombre: string;
   titulo: string;
   fecha: string;
@@ -62,7 +69,7 @@ interface TrabajoPractico {
   fecha_entrega: string;
   estado: 'pendiente' | 'entregado' | 'aprobado' | 'rehacer';
   nota: number | null;
-  descripcion: string | null;
+  descripcion?: string | null;
 }
 
 const BASE_API = process.env.NEXT_PUBLIC_API_URL
@@ -1675,7 +1682,7 @@ export default function Home() {
                   const pctAsistencia =
                     m.clases_totales > 0 ? Math.round((presentes / m.clases_totales) * 100) : 100;
                   const enRiesgoAsistencia =
-                    m.clases_totales > 0 && pctAsistencia < m.asistencia_minima;
+                  m.clases_totales > 0 && pctAsistencia < (m.asistencia_minima ?? 0);
 
                   return (
                     <div
@@ -1930,7 +1937,7 @@ export default function Home() {
                                 {b.hora_inicio} - {b.hora_fin}
                               </span>
                               <button
-                                onClick={() => eliminarHorario(b.id)}
+                               onClick={() => eliminarHorario(b.id!)}
                                 className="text-zinc-600 hover:text-red-400 cursor-pointer"
                               >
                                 ✕
@@ -2126,7 +2133,7 @@ export default function Home() {
                         </div>
 
                         <button
-                          onClick={() => eliminarExamen(ex.id)}
+                          onClick={() => eliminarExamen(ex.id!)}
                           className="text-zinc-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-zinc-800 cursor-pointer"
                         >
                           ✕
