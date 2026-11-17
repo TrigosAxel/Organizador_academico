@@ -127,12 +127,11 @@ export default function Home() {
 
   const [editandoFin, setEditandoFin] = useState(false);
   const [inputFinCursada, setInputFinCursada] = useState('');
+  
+  // Estados iniciales estáticos seguros para Vercel (SSR)
   const [ahora, setAhora] = useState<number>(0);
-
-  const [mesActual, setMesActual] = useState(() => {
-    const hoy = new Date();
-    return { anio: hoy.getFullYear(), mes: hoy.getMonth() };
-  });
+  const [mesActual, setMesActual] = useState({ anio: 2026, mes: 10 });
+  
   const [diaSeleccionado, setDiaSeleccionado] = useState<string | null>(null);
   const [tipoAgendarRapido, setTipoAgendarRapido] = useState<'examen' | 'tp'>('examen');
 
@@ -215,6 +214,7 @@ export default function Home() {
 
   useEffect(() => {
     let activo = true;
+
     const intervalo = setInterval(() => setAhora(Date.now()), 1000);
 
     const inicializar = async () => {
