@@ -11,7 +11,6 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-// Registro de usuario
 const registrarUsuario = async (req, res) => {
   const { nombre, email, password } = req.body;
   try {
@@ -35,7 +34,6 @@ const registrarUsuario = async (req, res) => {
   }
 };
 
-// Inicio de sesión robusto que detecta cualquier formato de contraseña
 const loginUsuario = async (req, res) => {
   const { email, password } = req.body;
   try {
@@ -45,23 +43,14 @@ const loginUsuario = async (req, res) => {
     }
 
     const usuario = resultado.rows[0];
-    
-    // Detectar la contraseña sin importar el nombre de la columna en la BD
-    const passGuarda = usuario.password || usuario.password_hash || usuario.contrasenya;
+    const passwordAlmacenada = usuario.password || usuario.password_hash;
 
-    if (!passGuarda) {
-      return res.status(400).json({ error: 'La cuenta no tiene una contraseña válida asignada' });
+    // Validación estricta para evitar el error de arguments required
+    if (!passwordAlmacenada) {
+      return res.status(400).json({ error: 'La cuenta no tiene una contraseña registrada en la base de datos' });
     }
 
-    let passwordValida = false;
-    try {
-      // Intentar comparar con bcrypt (si está hasheada)
-      passwordValida = await bcrypt.compare(password, passGuarda);
-    } catch (e) {
-      // Si falla porque estaba en texto plano
-      passwordValida = (password === passGuarda);
-    }
-
+    const passwordValida = await bcrypt.compare(password, passwordAlmacenada);
     if (!passwordValida) {
       return res.status(400).json({ error: 'Correo o contraseña incorrectos' });
     }
@@ -77,7 +66,7 @@ const loginUsuario = async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('Error en login:', err);
+    console.error('Error detallado en login:', err);
     res.status(500).json({ error: 'Error en el servidor al iniciar sesión' });
   }
 };
@@ -100,7 +89,6 @@ const migrarInvitado = async (req, res) => {
   res.json({ mensaje: 'Migrado' });
 };
 
-// Solicitar recuperación y enviar email real con Nodemailer
 const solicitarRecuperacion = async (req, res) => {
   const { email } = req.body;
   try {
@@ -110,7 +98,7 @@ const solicitarRecuperacion = async (req, res) => {
     }
     
     const tokenReseteo = crypto.randomBytes(32).toString('hex');
-    const expiracion = new Date(Date.now() + 3600000); // 1 hora
+    const expiracion = new Date(Date.now() + 3600000);
 
     await pool.query(
       'UPDATE usuarios SET token_reseteo = $1, expira_token = $2 WHERE email = $3',
@@ -136,12 +124,11 @@ const solicitarRecuperacion = async (req, res) => {
 
     res.json({ mensaje: 'Correo de recuperación enviado con éxito a tu bandeja de entrada' });
   } catch (err) {
-    console.error('Error al enviar correo de recuperación:', err);
+    console.error('Error al enviar correo:', err);
     res.status(500).json({ error: 'Error al enviar el correo de recuperación' });
   }
 };
 
-// Resetear contraseña con token
 const resetearPassword = async (req, res) => {
   const { token, nuevaPassword } = req.body;
   try {
