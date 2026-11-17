@@ -468,37 +468,16 @@ export default function Home() {
     cargarDatosAuth(token);
   };
 
-  const agregarMateria = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!nombre.trim()) return;
+ const agregarMateria = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!nombre.trim()) return;
 
-    if (modoSesion === 'guest') {
-      const nueva: Materia = {
-        id: Date.now(),
-        nombre: nombre.trim(),
-        anio_carrera: Number(anioCarrera),
-        cuatrimestre,
-        estado,
-        nota_final: estado === 'aprobada' && notaFinal ? Number(notaFinal) : null,
-        modalidad_aprobacion: estado === 'aprobada' ? modalidadAprobacion : null,
-        clases_totales: 0,
-        inasistencias: 0,
-        asistencia_minima: Number(asistenciaMinima) || 75,
-      };
-      const nuevas = [...materias, nueva];
-      setMaterias(nuevas);
-      guardarGuestLocal({ materias: nuevas });
-      setNombre('');
-      setNotaFinal('');
-      return;
-    }
-
-    if (!token) return;
-    await fetch(`${BASE_API}/materias`, {
+  try {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/materias`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        nombre,
+        nombre: nombre.trim(),
         anio_carrera: Number(anioCarrera),
         cuatrimestre,
         estado,
@@ -507,10 +486,18 @@ export default function Home() {
         asistencia_minima: Number(asistenciaMinima) || 75,
       }),
     });
-    setNombre('');
-    setNotaFinal('');
-    cargarDatosAuth(token);
-  };
+
+    if (response.ok) {
+      const nuevaMateriaBD = await response.json();
+      setMaterias([...materias, nuevaMateriaBD]);
+      setNombre(''); // Limpia el input
+    } else {
+      console.error('Error al guardar en el servidor');
+    }
+  } catch (error) {
+    console.error('Error de red al agregar materia:', error);
+  }
+};
 
   const actualizarMateria = async (actualizada: Materia) => {
     if (modoSesion === 'guest') {
