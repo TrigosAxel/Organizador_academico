@@ -483,7 +483,7 @@ export default function Home() {
         estado,
         nota_final: estado === 'aprobada' && notaFinal ? Number(notaFinal) : null,
         modalidad_aprobacion: estado === 'aprobada' ? modalidadAprobacion : null,
-        asistencia_minima: Number(asistenciaMinima) || 75,
+        asistencia_minima: Number(asistenciaMinima) || 0,
       }),
     });
 

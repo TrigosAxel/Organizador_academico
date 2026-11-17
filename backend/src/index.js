@@ -61,17 +61,16 @@ app.post('/api/materias', async (req, res) => {
       RETURNING *;
     `;
     
-    const values = [
+const values = [
       usuario_id, 
       nombre, 
       anio_carrera, 
-      cuatrimestre, 
-      estado || 'pendiente', 
+      cuatrimestre ? cuatrimestre.toLowerCase() : 'anual', 
+      estado ? estado.toLowerCase() : 'pendiente', 
       nota_final || null, 
-      modalidad_aprobacion || null, 
-      asistencia_minima || 75
+      modalidad_aprobacion ? modalidad_aprobacion.toLowerCase() : null, 
+      asistencia_minima || 0
     ];
-
     // Nota: Si tu archivo db.js exporta 'pool' en lugar de 'db', cambia db.query por pool.query
     const nuevaMateria = await db.query(query, values);
     res.status(201).json(nuevaMateria.rows[0]);
