@@ -1,4 +1,4 @@
-const pool = require('./db');
+const pool = require('../db');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 
@@ -64,7 +64,6 @@ const obtenerPerfil = async (req, res) => {
     const tokenHeader = req.headers.authorization;
     if (!tokenHeader) return res.status(401).json({ error: 'No autorizado' });
     
-    // Simplificado para devolver el primer usuario o mock si usas token estático
     const resultado = await pool.query('SELECT id, nombre, email, fin_cursada FROM usuarios LIMIT 1');
     if (resultado.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
     
