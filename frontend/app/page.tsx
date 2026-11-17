@@ -469,39 +469,43 @@ export default function Home() {
   };
 
  const agregarMateria = async (e: React.FormEvent) => {
-  e.preventDefault();
-  if (!nombre.trim()) return;
+    e.preventDefault();
+    if (!nombre.trim()) return;
 
-  try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/materias`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        nombre: nombre.trim(),
-      anio_carrera: parseInt(String(anioCarrera)) || 1,
-        cuatrimestre,
-        estado,
-        nota_final: estado === 'aprobada' && notaFinal ? Number(notaFinal) : null,
-        modalidad_aprobacion: estado === 'aprobada' ? modalidadAprobacion : null,
-        asistencia_minima: Number(asistenciaMinima) || 0,
-      }),
-    });
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/materias`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` // 👈 Clave para que el backend reconozca tu usuario
+        },
+        body: JSON.stringify({
+          nombre: nombre.trim(),
+          anio_carrera: parseInt(String(anioCarrera)) || 1,
+          cuatrimestre: cuatrimestre ? cuatrimestre.toLowerCase() : 'anual',
+          estado: estado ? estado.toLowerCase() : 'pendiente',
+          nota_final: estado === 'aprobada' && notaFinal ? Number(notaFinal) : null,
+          modalidad_aprobacion: estado === 'aprobada' ? modalidadAprobacion.toLowerCase() : null,
+          asistencia_minima: Number(asistenciaMinima) || 75,
+        }),
+      });
 
-    if (response.ok) {
-      const nuevaMateriaBD = await response.json();
-      setMaterias([...materias, nuevaMateriaBD]);
-      setNombre(''); // Limpia el input
-      if (typeof cargarDatosAuth === 'function' && token) {
-        cargarDatosAuth(token);
+      if (response.ok) {
+        const nuevaMateriaBD = await response.json();
+        setMaterias([...materias, nuevaMateriaBD]);
+        setNombre('');
+        if (typeof cargarDatosAuth === 'function' && token) {
+          cargarDatosAuth(token);
+        }
+      } else {
+        const errorData = await response.json();
+        console.error('Error al guardar en el servidor:', errorData);
+        alert('Error: ' + (errorData.error || 'No se pudo guardar'));
       }
-    } else {
-      console.error('Error al guardar en el servidor');
+    } catch (error) {
+      console.error('Error de red al agregar materia:', error);
     }
- 
-  } catch (error) {
-    console.error('Error de red al agregar materia:', error);
-  }
-};
+  };
 
   const actualizarMateria = async (actualizada: Materia) => {
     if (modoSesion === 'guest') {
