@@ -35,7 +35,7 @@ const registrarUsuario = async (req, res) => {
   }
 };
 
-// Inicio de sesión (con protección contra hashes vacíos o texto plano)
+// Inicio de sesión robusto que detecta cualquier formato de contraseña
 const loginUsuario = async (req, res) => {
   const { email, password } = req.body;
   try {
@@ -45,17 +45,21 @@ const loginUsuario = async (req, res) => {
     }
 
     const usuario = resultado.rows[0];
+    
+    // Detectar la contraseña sin importar el nombre de la columna en la BD
+    const passGuarda = usuario.password || usuario.password_hash || usuario.contrasenya;
 
-    if (!usuario.password) {
+    if (!passGuarda) {
       return res.status(400).json({ error: 'La cuenta no tiene una contraseña válida asignada' });
     }
 
     let passwordValida = false;
     try {
-      passwordValida = await bcrypt.compare(password, usuario.password);
+      // Intentar comparar con bcrypt (si está hasheada)
+      passwordValida = await bcrypt.compare(password, passGuarda);
     } catch (e) {
-      // Si por alguna razón la contraseña en BD no era un hash válido, comparamos directamente o falla de forma controlada
-      passwordValida = (password === usuario.password);
+      // Si falla porque estaba en texto plano
+      passwordValida = (password === passGuarda);
     }
 
     if (!passwordValida) {
