@@ -52,8 +52,7 @@ app.post('/api/materias', async (req, res) => {
       asistencia_minima 
     } = req.body;
 
-    // Asumimos que extraes el ID del usuario autenticado (ajustá según tu middleware de auth, ej: req.usuarioId o req.user.id)
-    const usuario_id = req.usuarioId || 1; // O el campo que use tu sistema de auth
+    const usuario_id = req.usuarioId || 1; 
 
     const query = `
       INSERT INTO materias (usuario_id, nombre, anio_carrera, cuatrimestre, estado, nota_final, modalidad_aprobacion, asistencia_minima)
@@ -72,11 +71,11 @@ app.post('/api/materias', async (req, res) => {
       asistencia_minima || 75
     ];
 
-    const nuevaMateria = await db.query(query, values); // Asegúrate de que 'db' sea tu objeto de conexión configurado
+    const nuevaMateria = await db.query(query, values);
     res.status(201).json(nuevaMateria.rows[0]);
 
   } catch (err) {
-    console.error("Error al insertar materia:", err);
+    console.error("Error al insertar materia:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
