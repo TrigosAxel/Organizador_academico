@@ -1,4 +1,9 @@
-// Solicitar recuperación de contraseña
+const pool = require('./db');
+const bcrypt = require('bcrypt');
+const crypto = require('crypto');
+
+// ... (tus funciones anteriores de login y register que ya tenías) ...
+
 const solicitarRecuperacion = async (req, res) => {
   const { email } = req.body;
   try {
@@ -7,7 +12,6 @@ const solicitarRecuperacion = async (req, res) => {
       return res.status(404).json({ error: 'No existe una cuenta con este correo' });
     }
     
-    // Generar token único de reseteo (válido por 1 hora)
     const tokenReseteo = crypto.randomBytes(32).toString('hex');
     const expiracion = new Date(Date.now() + 3600000);
 
@@ -16,16 +20,12 @@ const solicitarRecuperacion = async (req, res) => {
       [tokenReseteo, expiracion, email]
     );
 
-    // Aquí enviarías el email con nodemailer usando el link: 
-    // https://tu-dominio.com/reset-password?token=${tokenReseteo}
-    
     res.json({ mensaje: 'Correo de recuperación enviado con éxito', tokenDemo: tokenReseteo });
   } catch (err) {
     res.status(500).json({ error: 'Error en el servidor' });
   }
 };
 
-// Actualizar contraseña con el token
 const resetearPassword = async (req, res) => {
   const { token, nuevaPassword } = req.body;
   try {
@@ -49,4 +49,10 @@ const resetearPassword = async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: 'Error al actualizar la contraseña' });
   }
+};
+
+module.exports = {
+  // ... tus exports anteriores ...
+  solicitarRecuperacion,
+  resetearPassword
 };
