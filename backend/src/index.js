@@ -52,6 +52,7 @@ app.post('/api/materias', async (req, res) => {
       asistencia_minima 
     } = req.body;
 
+    // Usamos un usuario_id por defecto seguro (ej: 1 o el que exista en tu tabla usuarios)
     const usuario_id = req.usuarioId || 1; 
 
     const query = `
@@ -71,12 +72,14 @@ app.post('/api/materias', async (req, res) => {
       asistencia_minima || 75
     ];
 
+    // Nota: Si tu archivo db.js exporta 'pool' en lugar de 'db', cambia db.query por pool.query
     const nuevaMateria = await db.query(query, values);
     res.status(201).json(nuevaMateria.rows[0]);
 
   } catch (err) {
-    console.error("Error al insertar materia:", err.message);
-    res.status(500).json({ error: err.message });
+    console.error("Error detallado en Supabase:", err);
+    // Devolvemos el mensaje exacto del error de Postgres al cliente
+    res.status(500).json({ error: err.message, detail: err.detail });
   }
 });
 
