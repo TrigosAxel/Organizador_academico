@@ -17,6 +17,13 @@ const {
   resetearPassword
 } = require('./controllers/authController');
 
+const {
+  obtenerConfiguracion,
+  actualizarConfiguracion,
+  resetearConfiguracion,
+  crearComentario
+} = require('./controllers/configuracionController');
+
 const app = express();
 const PORT = process.env.PORT || 4000;
 
@@ -44,6 +51,14 @@ app.put('/api/auth/carrera', requireAuth, actualizarCarrera);
 app.put('/api/auth/perfil', requireAuth, actualizarPerfil);
 app.put('/api/auth/password', requireAuth, cambiarPassword);
 app.post('/api/auth/migrar-invitado', requireAuth, migrarInvitado);
+// ---------------------------------------------------------------
+// CONFIGURACIÓN Y COMENTARIOS
+// ---------------------------------------------------------------
+app.get('/api/configuracion', requireAuth, obtenerConfiguracion);
+app.put('/api/configuracion', requireAuth, actualizarConfiguracion);
+app.post('/api/configuracion/reset', requireAuth, resetearConfiguracion);
+
+app.post('/api/comentarios', requireAuth, crearComentario);
 
 // Todo lo que se define de acá para abajo (materias, horarios, etc.) exige token
 app.use('/api', requireAuth);

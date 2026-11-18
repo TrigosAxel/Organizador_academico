@@ -29,14 +29,16 @@ const enviarCorreo = async ({ to, subject, html }) => {
 const generarToken = (usuario) =>
   jwt.sign({ id: usuario.id }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
-// Datos del usuario que se le devuelven al frontend (nunca el hash de la contraseña).
-// Usa ?? null para que no falle aunque alguna columna opcional todavía no exista.
 const usuarioPublico = (u) => ({
   id: u.id,
   nombre: u.nombre,
+  apellido: u.apellido ?? null,          // NUEVO
   email: u.email,
   fin_cursada: u.fin_cursada ?? null,
   carrera: u.carrera ?? null,
+  universidad: u.universidad ?? null,    // NUEVO
+  anio_ingreso: u.anio_ingreso ?? null,  // NUEVO
+  cuatrimestre_actual: u.cuatrimestre_actual ?? null, // NUEVO
   foto: u.foto ?? null
 });
 
@@ -202,7 +204,19 @@ const actualizarPerfil = async (req, res) => {
         return res.status(400).json({ error: 'La foto no es válida o pesa demasiado' });
       }
     }
-
+    if ('apellido' in body) {
+      agregar('apellido', String(body.apellido || '').trim().slice(0, 80) || null);
+    }
+    if ('universidad' in body) {
+      agregar('universidad', String(body.universidad || '').trim().slice(0, 150) || null);
+    }
+    if ('anio_ingreso' in body) {
+      const anio = parseInt(body.anio_ingreso);
+      agregar('anio_ingreso', isNaN(anio) ? null : anio);
+    }
+    if ('cuatrimestre_actual' in body) {
+      agregar('cuatrimestre_actual', String(body.cuatrimestre_actual || '').trim().slice(0, 10) || null);
+    }
     if (!sets.length) return res.status(400).json({ error: 'No hay cambios para guardar' });
 
     valores.push(req.usuarioId);
