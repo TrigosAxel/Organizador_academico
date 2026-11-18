@@ -29,6 +29,20 @@ const enviarCorreo = async ({ to, subject, html }) => {
 const generarToken = (usuario) =>
   jwt.sign({ id: usuario.id }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
+// Datos del usuario que se le devuelven al frontend (nunca el hash de la contraseña).
+// Usa ?? null para que no falle aunque alguna columna opcional todavía no exista.
+const usuarioPublico = (u) => ({
+  id: u.id,
+  nombre: u.nombre,
+  email: u.email,
+  fin_cursada: u.fin_cursada ?? null,
+  carrera: u.carrera ?? null,
+  foto: u.foto ?? null
+});
+
+// La foto se guarda como imagen chica en base64 (el frontend la reduce a 256x256)
+const FOTO_VALIDA = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+
 // '' o undefined -> null (para columnas numéricas y de fecha)
 const nn = (v) => (v === '' || v === undefined ? null : v);
 
@@ -54,7 +68,7 @@ const registrarUsuario = async (req, res) => {
     const passwordHash = await bcrypt.hash(password, salt);
 
     const nuevoUsuario = await pool.query(
-      'INSERT INTO usuarios (nombre, email, password_hash) VALUES ($1, $2, $3) RETURNING id, nombre, email, fin_cursada, carrera',
+      'INSERT INTO usuarios (nombre, email, password_hash) VALUES ($1, $2, $3) RETURNING *',
       [nombre, email, passwordHash]
     );
     const usuario = nuevoUsuario.rows[0];
@@ -63,7 +77,7 @@ const registrarUsuario = async (req, res) => {
     res.status(201).json({
       mensaje: 'Usuario registrado con éxito',
       token: generarToken(usuario),
-      usuario
+      usuario: usuarioPublico(usuario)
     });
   } catch (err) {
     console.error('Error en registro:', err);
@@ -97,13 +111,7 @@ const loginUsuario = async (req, res) => {
     res.json({
       mensaje: 'Login exitoso',
       token: generarToken(usuario),
-      usuario: {
-        id: usuario.id,
-        nombre: usuario.nombre,
-        email: usuario.email,
-        fin_cursada: usuario.fin_cursada,
-        carrera: usuario.carrera || null
-      }
+      usuario: usuarioPublico(usuario)
     });
   } catch (err) {
     console.error('Error detallado en login:', err);
@@ -116,12 +124,9 @@ const loginUsuario = async (req, res) => {
 // ---------------------------------------------------------------
 const obtenerPerfil = async (req, res) => {
   try {
-    const resultado = await pool.query(
-      'SELECT id, nombre, email, fin_cursada, carrera FROM usuarios WHERE id = $1',
-      [req.usuarioId]
-    );
+    const resultado = await pool.query('SELECT * FROM usuarios WHERE id = $1', [req.usuarioId]);
     if (resultado.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
-    res.json(resultado.rows[0]);
+    res.json(usuarioPublico(resultado.rows[0]));
   } catch (err) {
     console.error('Error al obtener perfil:', err);
     res.status(500).json({ error: 'Error al obtener perfil' });
@@ -135,11 +140,11 @@ const actualizarFinCursada = async (req, res) => {
   try {
     const { fin_cursada } = req.body;
     const resultado = await pool.query(
-      'UPDATE usuarios SET fin_cursada = $1 WHERE id = $2 RETURNING id, nombre, email, fin_cursada, carrera',
+      'UPDATE usuarios SET fin_cursada = $1 WHERE id = $2 RETURNING *',
       [nn(fin_cursada) || null, req.usuarioId]
     );
     if (resultado.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
-    res.json({ mensaje: 'Fin de cursada actualizado', usuario: resultado.rows[0] });
+    res.json({ mensaje: 'Fin de cursada actualizado', usuario: usuarioPublico(resultado.rows[0]) });
   } catch (err) {
     console.error('Error al actualizar fin de cursada:', err);
     res.status(500).json({ error: 'Error al actualizar la fecha de fin de cursada' });
@@ -153,14 +158,97 @@ const actualizarCarrera = async (req, res) => {
   try {
     const carrera = String(req.body.carrera || '').trim().slice(0, 120);
     const resultado = await pool.query(
-      'UPDATE usuarios SET carrera = $1 WHERE id = $2 RETURNING id, nombre, email, fin_cursada, carrera',
+      'UPDATE usuarios SET carrera = $1 WHERE id = $2 RETURNING *',
       [carrera || null, req.usuarioId]
     );
     if (resultado.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
-    res.json({ mensaje: 'Carrera actualizada', usuario: resultado.rows[0] });
+    res.json({ mensaje: 'Carrera actualizada', usuario: usuarioPublico(resultado.rows[0]) });
   } catch (err) {
     console.error('Error al actualizar carrera:', err);
     res.status(500).json({ error: 'Error al guardar la carrera' });
+  }
+};
+
+// ---------------------------------------------------------------
+// PERFIL: nombre, carrera y foto (requiere token)
+// Solo se modifican los campos que vienen en la petición.
+// ---------------------------------------------------------------
+const actualizarPerfil = async (req, res) => {
+  try {
+    const body = req.body || {};
+    const sets = [];
+    const valores = [];
+    const agregar = (columna, valor) => {
+      valores.push(valor);
+      sets.push(`${columna} = $${valores.length}`);
+    };
+
+    if ('nombre' in body) {
+      const nombre = String(body.nombre || '').trim();
+      if (!nombre) return res.status(400).json({ error: 'El nombre no puede estar vacío' });
+      agregar('nombre', nombre.slice(0, 80));
+    }
+
+    if ('carrera' in body) {
+      agregar('carrera', String(body.carrera || '').trim().slice(0, 120) || null);
+    }
+
+    if ('foto' in body) {
+      if (body.foto === null) {
+        agregar('foto', null);
+      } else if (typeof body.foto === 'string' && body.foto.length <= 400000 && FOTO_VALIDA.test(body.foto)) {
+        agregar('foto', body.foto);
+      } else {
+        return res.status(400).json({ error: 'La foto no es válida o pesa demasiado' });
+      }
+    }
+
+    if (!sets.length) return res.status(400).json({ error: 'No hay cambios para guardar' });
+
+    valores.push(req.usuarioId);
+    const resultado = await pool.query(
+      `UPDATE usuarios SET ${sets.join(', ')} WHERE id = $${valores.length} RETURNING *`,
+      valores
+    );
+    if (resultado.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    res.json({ mensaje: 'Perfil actualizado', usuario: usuarioPublico(resultado.rows[0]) });
+  } catch (err) {
+    console.error('Error al actualizar perfil:', err);
+    if (err.code === '42703') {
+      return res.status(500).json({ error: 'Falta la columna "foto" en la base de datos. Corré el SQL de la foto en Supabase.' });
+    }
+    res.status(500).json({ error: 'Error al guardar los cambios del perfil' });
+  }
+};
+
+// ---------------------------------------------------------------
+// CAMBIAR CONTRASEÑA (requiere token y la contraseña actual)
+// ---------------------------------------------------------------
+const cambiarPassword = async (req, res) => {
+  try {
+    const { passwordActual, passwordNueva } = req.body || {};
+    if (!passwordActual || !passwordNueva) {
+      return res.status(400).json({ error: 'Completá la contraseña actual y la nueva' });
+    }
+    if (passwordNueva.length < 6) {
+      return res.status(400).json({ error: 'La contraseña nueva debe tener al menos 6 caracteres' });
+    }
+
+    const resultado = await pool.query('SELECT * FROM usuarios WHERE id = $1', [req.usuarioId]);
+    if (resultado.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    const usuario = resultado.rows[0];
+    const hashActual = usuario.password_hash || usuario.password;
+    const coincide = hashActual ? await bcrypt.compare(passwordActual, hashActual) : false;
+    if (!coincide) return res.status(400).json({ error: 'La contraseña actual no es correcta' });
+
+    const hashNuevo = await bcrypt.hash(passwordNueva, 10);
+    await pool.query('UPDATE usuarios SET password_hash = $1 WHERE id = $2', [hashNuevo, req.usuarioId]);
+    res.json({ mensaje: 'Contraseña actualizada correctamente' });
+  } catch (err) {
+    console.error('Error al cambiar contraseña:', err);
+    res.status(500).json({ error: 'Error al cambiar la contraseña' });
   }
 };
 
@@ -179,7 +267,8 @@ const migrarInvitado = async (req, res) => {
     tps = [],
     correlativas = [],
     fin_cursada,
-    carrera
+    carrera,
+    foto
   } = req.body || {};
   const uid = req.usuarioId;
 
@@ -282,6 +371,16 @@ const migrarInvitado = async (req, res) => {
       );
     }
 
+    // La foto es opcional: si falla (por ejemplo, falta la columna) no se cancela la migración
+    if (typeof foto === 'string' && foto.length <= 400000 && FOTO_VALIDA.test(foto)) {
+      await client.query('SAVEPOINT foto_invitado');
+      try {
+        await client.query('UPDATE usuarios SET foto = $1 WHERE id = $2', [foto, uid]);
+      } catch (e) {
+        await client.query('ROLLBACK TO SAVEPOINT foto_invitado');
+      }
+    }
+
     await client.query('COMMIT');
     res.json({ mensaje: 'Datos migrados con éxito', materias_migradas: mapa.size });
   } catch (err) {
@@ -377,6 +476,8 @@ module.exports = {
   obtenerPerfil,
   actualizarFinCursada,
   actualizarCarrera,
+  actualizarPerfil,
+  cambiarPassword,
   migrarInvitado,
   solicitarRecuperacion,
   resetearPassword

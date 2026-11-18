@@ -14,6 +14,7 @@ interface Usuario {
   email: string;
   fin_cursada: string | null;
   carrera?: string | null;
+  foto?: string | null;
 }
 
 interface Materia {
@@ -58,6 +59,7 @@ interface Examen {
   nota_intento_1: number | null;
   nota_intento_2: number | null;
   nota_vigente: number | null;
+  intentos?: (number | null)[];
   condicion: 'pendiente' | 'aprobado' | 'desaprobado' | 'promociona';
   notas_estudio: string | null;
 }
@@ -74,6 +76,59 @@ interface TrabajoPractico {
 }
 
 const BASE_API = 'https://organizador-academico-6kv1.onrender.com/api';
+
+const aNumero = (v: unknown): number | null =>
+  v === null || v === undefined || v === '' || Number.isNaN(Number(v)) ? null : Number(v);
+
+// Lista de notas de un examen, sin límite de intentos.
+// Si el examen es viejo (solo nota_intento_1 / nota_intento_2) arma la lista a partir de esos campos.
+const intentosDe = (ex: Examen): (number | null)[] => {
+  if (Array.isArray(ex.intentos) && ex.intentos.length > 0) return ex.intentos.map(aNumero);
+  const viejos = [aNumero(ex.nota_intento_1), aNumero(ex.nota_intento_2)];
+  while (viejos.length > 0 && viejos[viejos.length - 1] === null) viejos.pop();
+  return viejos;
+};
+
+const mejorNota = (intentos: (number | null)[]): number | null => {
+  const validos = intentos.filter((n): n is number => n !== null);
+  return validos.length > 0 ? Math.max(...validos) : null;
+};
+
+const iniciales = (nombre: string) =>
+  nombre
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() ?? '')
+    .join('') || '?';
+
+// Recorta la foto en cuadrado y la reduce a 256x256 (JPEG) para que pese poco
+const procesarFoto = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('No se pudo leer la imagen'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('El archivo no es una imagen válida'));
+      img.onload = () => {
+        const lado = Math.min(img.width, img.height);
+        const sx = (img.width - lado) / 2;
+        const sy = (img.height - lado) / 2;
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 256;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('No se pudo procesar la imagen'));
+          return;
+        }
+        ctx.drawImage(img, sx, sy, lado, lado, 0, 0, 256, 256);
+        resolve(canvas.toDataURL('image/jpeg', 0.82));
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
 
 const MESES = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
@@ -148,8 +203,22 @@ export default function Home() {
   const [textoReset, setTextoReset] = useState('');
   const [errorReset, setErrorReset] = useState('');
   const [reseteando, setReseteando] = useState(false);
-  const [editandoCarrera, setEditandoCarrera] = useState(false);
-  const [inputCarrera, setInputCarrera] = useState('');
+  // Panel de usuario
+  const [panelUsuarioAbierto, setPanelUsuarioAbierto] = useState(false);
+  const [perfilNombre, setPerfilNombre] = useState('');
+  const [perfilCarrera, setPerfilCarrera] = useState('');
+  const [perfilMsg, setPerfilMsg] = useState('');
+  const [perfilError, setPerfilError] = useState('');
+  const [perfilGuardando, setPerfilGuardando] = useState(false);
+  const [mostrarCambioPass, setMostrarCambioPass] = useState(false);
+  const [passActual, setPassActual] = useState('');
+  const [passNueva, setPassNueva] = useState('');
+  const [passNueva2, setPassNueva2] = useState('');
+  const [passMsg, setPassMsg] = useState('');
+  const [passError, setPassError] = useState('');
+  const [passGuardando, setPassGuardando] = useState(false);
+  const [materiaPorBorrar, setMateriaPorBorrar] = useState<Materia | null>(null);
+  const [autenticando, setAutenticando] = useState(false);
 
   const [mostrarModalMigracion, setMostrarModalMigracion] = useState(false);
   const [migrando, setMigrando] = useState(false);
@@ -205,7 +274,8 @@ export default function Home() {
   const [tpDescripcion, setTpDescripcion] = useState('');
 
   const [corrMateriaId, setCorrMateriaId] = useState('');
-  const [corrRequisitoId, setCorrRequisitoId] = useState('');
+  const [corrRequisitoIds, setCorrRequisitoIds] = useState<string[]>([]);
+  const [errorCorr, setErrorCorr] = useState('');
   const [corrTipo, setCorrTipo] = useState<'regular' | 'aprobada'>('regular');
 
   const guardarGuestLocal = (datos: {
@@ -335,6 +405,7 @@ export default function Home() {
   const manejarAuth = async (e: React.FormEvent, migrarDatosLocales = false) => {
     e.preventDefault();
     setAuthError('');
+    setAutenticando(true);
     const endpoint = modoAuth === 'login' ? '/auth/login' : '/auth/register';
     const body =
       modoAuth === 'login'
@@ -386,6 +457,7 @@ export default function Home() {
       setAuthError('No se pudo conectar con el servidor');
     } finally {
       setMigrando(false);
+      setAutenticando(false);
     }
   };
 
@@ -711,27 +783,121 @@ export default function Home() {
     }
   };
 
-  const guardarCarrera = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!usuario) return;
-    const carrera = inputCarrera.trim().slice(0, 120);
+  const alternarPanelUsuario = () => {
+    if (!panelUsuarioAbierto && usuario) {
+      setPerfilNombre(usuario.nombre);
+      setPerfilCarrera(usuario.carrera || '');
+      setPerfilMsg('');
+      setPerfilError('');
+      setMostrarCambioPass(false);
+    }
+    setPanelUsuarioAbierto(!panelUsuarioAbierto);
+  };
 
-    if (modoSesion === 'guest') {
-      const nuevoU = { ...usuario, carrera: carrera || null };
-      setUsuario(nuevoU);
-      guardarGuestLocal({ usuario: nuevoU });
-      setEditandoCarrera(false);
+  // Guarda cambios del perfil (nombre, carrera y/o foto)
+  const guardarPerfil = async (cambios: {
+    nombre?: string;
+    carrera?: string | null;
+    foto?: string | null;
+  }) => {
+    if (!usuario) return;
+    setPerfilError('');
+    setPerfilMsg('');
+    setPerfilGuardando(true);
+    try {
+      if (modoSesion === 'guest') {
+        const nuevoU = { ...usuario, ...cambios };
+        setUsuario(nuevoU);
+        guardarGuestLocal({ usuario: nuevoU });
+        setPerfilMsg('Cambios guardados');
+        return;
+      }
+      if (!token) return;
+      const res = await fetch(`${BASE_API}/auth/perfil`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(cambios),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPerfilError(data.error || 'No se pudieron guardar los cambios');
+        return;
+      }
+      setUsuario(data.usuario);
+      setPerfilMsg('Cambios guardados');
+    } catch {
+      setPerfilError('No se pudo conectar con el servidor');
+    } finally {
+      setPerfilGuardando(false);
+    }
+  };
+
+  const guardarDatosPerfil = (e: React.FormEvent) => {
+    e.preventDefault();
+    const nombre = perfilNombre.trim();
+    if (!nombre) {
+      setPerfilError('El nombre no puede estar vacío');
       return;
     }
+    guardarPerfil({ nombre, carrera: perfilCarrera.trim() || null });
+  };
 
+  const cambiarFoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const archivo = e.target.files?.[0];
+    e.target.value = '';
+    if (!archivo) return;
+    setPerfilError('');
+    setPerfilMsg('');
+    if (!archivo.type.startsWith('image/')) {
+      setPerfilError('Elegí un archivo de imagen');
+      return;
+    }
+    if (archivo.size > 10 * 1024 * 1024) {
+      setPerfilError('La imagen es muy pesada (máximo 10 MB)');
+      return;
+    }
+    try {
+      const foto = await procesarFoto(archivo);
+      await guardarPerfil({ foto });
+    } catch (err) {
+      setPerfilError(err instanceof Error ? err.message : 'No se pudo cargar la foto');
+    }
+  };
+
+  const cambiarPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPassError('');
+    setPassMsg('');
+    if (passNueva.length < 6) {
+      setPassError('La contraseña nueva debe tener al menos 6 caracteres');
+      return;
+    }
+    if (passNueva !== passNueva2) {
+      setPassError('Las contraseñas nuevas no coinciden');
+      return;
+    }
     if (!token) return;
-    await fetch(`${BASE_API}/auth/carrera`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ carrera }),
-    });
-    setEditandoCarrera(false);
-    cargarDatosAuth(token);
+    setPassGuardando(true);
+    try {
+      const res = await fetch(`${BASE_API}/auth/password`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ passwordActual: passActual, passwordNueva: passNueva }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPassError(data.error || 'No se pudo cambiar la contraseña');
+        return;
+      }
+      setPassMsg(data.mensaje || 'Contraseña actualizada');
+      setPassActual('');
+      setPassNueva('');
+      setPassNueva2('');
+    } catch {
+      setPassError('No se pudo conectar con el servidor');
+    } finally {
+      setPassGuardando(false);
+    }
   };
 
   const importarPlan = async (items: { nombre: string; anio_carrera: number; cuatrimestre: string }[]) => {
@@ -857,6 +1023,7 @@ export default function Home() {
         nota_intento_1: null,
         nota_intento_2: null,
         nota_vigente: null,
+        intentos: [],
         condicion: 'pendiente',
         notas_estudio: examNotas || null,
       };
@@ -886,25 +1053,17 @@ export default function Home() {
     cargarDatosAuth(token);
   };
 
-  const actualizarResultadoExamen = async (
+  // Guarda la lista de intentos (y la condición) de un examen
+  const guardarExamen = async (
     examen: Examen,
-    campo: 'nota_intento_1' | 'nota_intento_2' | 'condicion',
-    valor: string
+    intentos: (number | null)[],
+    condicionManual?: Examen['condicion']
   ) => {
-    const n1Raw = campo === 'nota_intento_1' ? valor : examen.nota_intento_1;
-    const n2Raw = campo === 'nota_intento_2' ? valor : examen.nota_intento_2;
-    const n1 = n1Raw !== '' && n1Raw !== null ? Number(n1Raw) : null;
-    const n2 = n2Raw !== '' && n2Raw !== null ? Number(n2Raw) : null;
+    const vigente = mejorNota(intentos);
 
-    let notaVigente: number | null = null;
-    if (n1 !== null && n2 !== null) notaVigente = Math.max(n1, n2);
-    else if (n1 !== null) notaVigente = n1;
-    else if (n2 !== null) notaVigente = n2;
-
-    let nuevaCondicion = (campo === 'condicion' ? valor : examen.condicion) as Examen['condicion'];
-    if ((campo === 'nota_intento_1' || campo === 'nota_intento_2') && valor !== '' && notaVigente !== null) {
-      if (notaVigente >= 6 && examen.condicion === 'pendiente') nuevaCondicion = 'aprobado';
-      else if (notaVigente < 6 && examen.condicion === 'pendiente') nuevaCondicion = 'desaprobado';
+    let condicion = condicionManual ?? examen.condicion;
+    if (!condicionManual && condicion !== 'promociona') {
+      condicion = vigente === null ? 'pendiente' : vigente >= 6 ? 'aprobado' : 'desaprobado';
     }
 
     if (modoSesion === 'guest') {
@@ -912,10 +1071,11 @@ export default function Home() {
         ex.id === examen.id
           ? {
               ...ex,
-              nota_intento_1: n1,
-              nota_intento_2: n2,
-              nota_vigente: notaVigente,
-              condicion: nuevaCondicion,
+              intentos,
+              nota_intento_1: intentos[0] ?? null,
+              nota_intento_2: intentos[1] ?? null,
+              nota_vigente: vigente,
+              condicion,
             }
           : ex
       );
@@ -928,14 +1088,24 @@ export default function Home() {
     await fetch(`${BASE_API}/examenes/${examen.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({
-        nota_intento_1: n1,
-        nota_intento_2: n2,
-        condicion: nuevaCondicion,
-      }),
+      body: JSON.stringify({ intentos, condicion }),
     });
     cargarDatosAuth(token);
   };
+
+  const cambiarIntento = async (examen: Examen, indice: number, valor: string) => {
+    const actuales = intentosDe(examen);
+    let nuevo = aNumero(valor);
+    if (nuevo !== null) nuevo = Math.min(10, Math.max(0, nuevo));
+    if ((actuales[indice] ?? null) === nuevo) return;
+    const lista = [...actuales];
+    lista[indice] = nuevo;
+    await guardarExamen(examen, lista);
+  };
+
+  const agregarIntento = (examen: Examen) => guardarExamen(examen, [...intentosDe(examen), null]);
+
+  const quitarUltimoIntento = (examen: Examen) => guardarExamen(examen, intentosDe(examen).slice(0, -1));
 
   const eliminarExamen = async (id: number) => {
     if (modoSesion === 'guest') {
@@ -1033,39 +1203,63 @@ export default function Home() {
     cargarDatosAuth(token);
   };
 
+  const alternarRequisito = (id: string) =>
+    setCorrRequisitoIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
   const agregarCorrelativa = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!corrMateriaId || !corrRequisitoId || corrMateriaId === corrRequisitoId) return;
+    setErrorCorr('');
+    const ids = corrRequisitoIds.filter((id) => id !== corrMateriaId);
+    if (!corrMateriaId || ids.length === 0) return;
 
     if (modoSesion === 'guest') {
       const mDest = materias.find((m) => m.id === Number(corrMateriaId));
-      const mReq = materias.find((m) => m.id === Number(corrRequisitoId));
-      if (!mDest || !mReq) return;
-      const nuevaC: Correlativa = {
-        materia_id: mDest.id,
-        correlativa_id: mReq.id,
-        tipo_requisito: corrTipo,
-        materia_nombre: mDest.nombre,
-        correlativa_nombre: mReq.nombre,
-        correlativa_estado: mReq.estado,
-      };
-      const nuevas = [...correlativas, nuevaC];
+      if (!mDest) return;
+      const pares: Correlativa[] = [];
+      for (const id of ids) {
+        const mReq = materias.find((m) => m.id === Number(id));
+        if (!mReq) continue;
+        pares.push({
+          materia_id: mDest.id,
+          correlativa_id: mReq.id,
+          tipo_requisito: corrTipo,
+          materia_nombre: mDest.nombre,
+          correlativa_nombre: mReq.nombre,
+          correlativa_estado: mReq.estado,
+        });
+      }
+      // si el vínculo ya existía, se reemplaza (permite cambiar la condición)
+      const resto = correlativas.filter(
+        (c) => !(c.materia_id === mDest.id && ids.includes(String(c.correlativa_id)))
+      );
+      const nuevas = [...resto, ...pares];
       setCorrelativas(nuevas);
       guardarGuestLocal({ correlativas: nuevas });
+      setCorrRequisitoIds([]);
       return;
     }
 
     if (!token) return;
-    await fetch(`${BASE_API}/correlativas`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({
-        materia_id: Number(corrMateriaId),
-        correlativa_id: Number(corrRequisitoId),
-        tipo_requisito: corrTipo,
-      }),
-    });
-    cargarDatosAuth(token);
+    try {
+      const res = await fetch(`${BASE_API}/correlativas`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          materia_id: Number(corrMateriaId),
+          correlativa_ids: ids.map(Number),
+          tipo_requisito: corrTipo,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setErrorCorr(data.error || 'No se pudieron vincular las correlativas');
+        return;
+      }
+      setCorrRequisitoIds([]);
+      cargarDatosAuth(token);
+    } catch {
+      setErrorCorr('No se pudo conectar con el servidor');
+    }
   };
 
   const eliminarCorrelativa = async (materia_id: number, correlativa_id: number) => {
@@ -1134,7 +1328,12 @@ export default function Home() {
   if (verificandoSesion) {
     return (
       <main className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-4">
-        <p className="text-zinc-400">Cargando tu espacio académico...</p>
+        <div className="text-center space-y-2">
+          <p className="text-zinc-300">Cargando tu espacio académico...</p>
+          <p className="text-xs text-zinc-500 max-w-xs">
+            Si hace rato que no entrabas, el servidor puede tardar hasta un minuto en despertar.
+          </p>
+        </div>
       </main>
     );
   }
@@ -1395,11 +1594,22 @@ export default function Home() {
               />
             </div>
 
+            {autenticando && (
+              <p className="text-xs text-zinc-400 text-center">
+                Conectando… si el servidor estaba dormido, puede tardar hasta un minuto.
+              </p>
+            )}
+
             <button
               type="submit"
-              className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm py-2.5 rounded-lg transition cursor-pointer"
+              disabled={autenticando}
+              className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-wait text-white font-semibold text-sm py-2.5 rounded-lg transition cursor-pointer"
             >
-              {modoAuth === 'login' ? 'Entrar con mi cuenta' : 'Registrarme'}
+              {autenticando
+                ? 'Conectando...'
+                : modoAuth === 'login'
+                ? 'Entrar con mi cuenta'
+                : 'Registrarme'}
             </button>
           </form>
 
@@ -1456,6 +1666,23 @@ export default function Home() {
       ? (notasValidas.reduce((acc, n) => acc + n, 0) / notasValidas.length).toFixed(2)
       : '-';
 
+  // Foto de perfil, o un círculo con las iniciales si no hay foto
+  const renderAvatar = (tamano: string, textoTamano: string) =>
+    usuario?.foto ? (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={usuario.foto}
+        alt="Foto de perfil"
+        className={`${tamano} rounded-full object-cover border-2 border-zinc-700 shrink-0`}
+      />
+    ) : (
+      <span
+        className={`${tamano} ${textoTamano} rounded-full bg-gradient-to-br from-blue-600 to-purple-600 text-white font-bold flex items-center justify-center border-2 border-zinc-700 shrink-0`}
+      >
+        {iniciales(usuario?.nombre || '')}
+      </span>
+    );
+
   const materiasFiltradas = materias.filter((m) => {
     const coincideTexto = m.nombre.toLowerCase().includes(busqueda.toLowerCase());
     const coincideAnio = filtroAnio === 'todos' || m.anio_carrera === Number(filtroAnio);
@@ -1491,56 +1718,76 @@ export default function Home() {
   const examenesAgenda = examenes.filter((ex) => ex.fecha.startsWith(fechaFiltroAgenda));
   const tpsAgenda = tps.filter((tp) => tp.fecha_entrega.startsWith(fechaFiltroAgenda));
 
+  const cumpleRequisito = (c: Correlativa) => {
+    const matReq = materias.find((m) => m.id === c.correlativa_id);
+    const est = matReq ? matReq.estado : c.correlativa_estado;
+    return c.tipo_requisito === 'aprobada' ? est === 'aprobada' : est === 'regular' || est === 'aprobada';
+  };
+
+  type GrupoCorrelativas = { materia_id: number; nombre: string; reqs: Correlativa[] };
+  const gruposMap: Record<number, GrupoCorrelativas> = {};
+  for (const c of correlativas as Correlativa[]) {
+    if (!gruposMap[c.materia_id]) {
+      gruposMap[c.materia_id] = {
+        materia_id: c.materia_id,
+        nombre: c.materia_nombre || materias.find((m) => m.id === c.materia_id)?.nombre || 'Materia',
+        reqs: [],
+      };
+    }
+    gruposMap[c.materia_id].reqs.push(c);
+  }
+  const correlativasPorMateria: GrupoCorrelativas[] = (Object.values(gruposMap) as GrupoCorrelativas[]).sort(
+    (a, b) => a.nombre.localeCompare(b.nombre)
+  );
+
+  const proximosVencimientos = [
+    ...examenes
+      .map((ex) => ({
+        clave: `ex-${ex.id}`,
+        tipo: 'Examen',
+        titulo: ex.titulo,
+        materia: ex.materia_nombre,
+        dias: calcularDiasRestantes(ex.fecha),
+      }))
+      .filter((x) => x.dias >= 0 && x.dias <= 7),
+    ...tps
+      .filter((tp) => tp.estado === 'pendiente' || tp.estado === 'rehacer')
+      .map((tp) => ({
+        clave: `tp-${tp.id}`,
+        tipo: 'TP',
+        titulo: tp.titulo,
+        materia: tp.materia_nombre,
+        dias: calcularDiasRestantes(tp.fecha_entrega),
+      }))
+      .filter((x) => x.dias <= 7),
+  ].sort((a, b) => a.dias - b.dias);
+
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100 p-4 sm:p-6 md:p-10">
       <div className="max-w-6xl mx-auto space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-zinc-900/80 border border-zinc-800 rounded-2xl px-4 sm:px-5 py-3.5">
-          <div className="flex flex-wrap items-center gap-2.5">
-            <span className="text-base sm:text-lg font-semibold text-zinc-100">
-              👋 ¡Bienvenido, <span className="text-blue-400">{usuario.nombre}</span>!
-            </span>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={alternarPanelUsuario}
+              aria-expanded={panelUsuarioAbierto}
+              title="Ver mi perfil"
+              className="flex items-center gap-3 text-left cursor-pointer rounded-xl hover:bg-zinc-800/60 pr-3 transition"
+            >
+              {renderAvatar('h-11 w-11', 'text-sm')}
+              <span className="flex flex-col">
+                <span className="text-base sm:text-lg font-semibold text-zinc-100 leading-tight">
+                  👋 ¡Bienvenido, <span className="text-blue-400">{usuario.nombre}</span>!
+                </span>
+                <span className="text-xs text-zinc-400">
+                  {usuario.carrera || 'Tocá para ver tu perfil'} {panelUsuarioAbierto ? '▲' : '▼'}
+                </span>
+              </span>
+            </button>
             {modoSesion === 'guest' && (
               <span className="text-xs bg-amber-950/70 text-amber-300 border border-amber-800/60 px-2.5 py-0.5 rounded-full">
                 Modo Invitado
               </span>
-            )}
-            {editandoCarrera ? (
-              <form onSubmit={guardarCarrera} className="flex flex-wrap items-center gap-2">
-                <input
-                  type="text"
-                  placeholder="Ej: Lic. en Sistemas de Información"
-                  value={inputCarrera}
-                  onChange={(e) => setInputCarrera(e.target.value)}
-                  maxLength={120}
-                  autoFocus
-                  className="bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-100 w-64 max-w-full"
-                />
-                <button
-                  type="submit"
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium px-3 py-1.5 rounded-lg cursor-pointer"
-                >
-                  Guardar
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setEditandoCarrera(false)}
-                  className="bg-zinc-800 text-zinc-300 text-xs px-3 py-1.5 rounded-lg cursor-pointer"
-                >
-                  Cancelar
-                </button>
-              </form>
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  setInputCarrera(usuario.carrera || '');
-                  setEditandoCarrera(true);
-                }}
-                title="Tocá para cambiar tu carrera"
-                className="text-xs bg-zinc-800/70 hover:bg-zinc-800 text-zinc-300 border border-zinc-700 px-2.5 py-1 rounded-full cursor-pointer transition"
-              >
-                🎓 {usuario.carrera || 'Definir mi carrera'} ✎
-              </button>
             )}
           </div>
 
@@ -1564,6 +1811,181 @@ export default function Home() {
             </button>
           </div>
         </div>
+
+        {panelUsuarioAbierto && (
+          <section className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-4 sm:p-6 space-y-6">
+            <div className="flex flex-col sm:flex-row gap-6 sm:items-start">
+              <div className="flex flex-col items-center gap-2.5 sm:w-40">
+                {renderAvatar('h-24 w-24', 'text-3xl')}
+                <div className="flex items-center gap-3">
+                  <label className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 px-2.5 py-1 rounded-lg cursor-pointer transition">
+                    {usuario.foto ? 'Cambiar foto' : 'Subir foto'}
+                    <input type="file" accept="image/*" onChange={cambiarFoto} className="hidden" />
+                  </label>
+                  {usuario.foto && (
+                    <button
+                      type="button"
+                      onClick={() => guardarPerfil({ foto: null })}
+                      className="text-xs text-zinc-400 hover:text-red-400 underline cursor-pointer"
+                    >
+                      Quitar
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <form onSubmit={guardarDatosPerfil} className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Nombre</label>
+                  <input
+                    type="text"
+                    value={perfilNombre}
+                    onChange={(e) => setPerfilNombre(e.target.value)}
+                    maxLength={80}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Correo electrónico</label>
+                  <input
+                    type="text"
+                    value={modoSesion === 'guest' ? 'Sin cuenta (modo invitado)' : usuario.email}
+                    disabled
+                    className="w-full bg-zinc-950/50 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-500"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-xs text-zinc-400 mb-1">Carrera que estudiás</label>
+                  <input
+                    type="text"
+                    placeholder="Ej: Lic. en Sistemas de Información"
+                    value={perfilCarrera}
+                    onChange={(e) => setPerfilCarrera(e.target.value)}
+                    maxLength={120}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <button
+                    type="submit"
+                    disabled={perfilGuardando}
+                    className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white font-semibold text-sm px-4 py-2 rounded-lg transition cursor-pointer"
+                  >
+                    {perfilGuardando ? 'Guardando...' : 'Guardar cambios'}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {perfilError && (
+              <div className="bg-red-950/60 border border-red-800 text-red-300 text-xs px-3 py-2.5 rounded-lg">
+                {perfilError}
+              </div>
+            )}
+            {perfilMsg && (
+              <div className="bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-xs px-3 py-2.5 rounded-lg">
+                {perfilMsg}
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-zinc-950/70 border border-zinc-800 rounded-xl px-3 py-2.5 text-center">
+                <p className="text-[10px] text-zinc-400 uppercase">Aprobadas</p>
+                <p className="text-lg font-bold text-emerald-400">
+                  {aprobadas.length}
+                  <span className="text-xs text-zinc-500">/{materias.length}</span>
+                </p>
+              </div>
+              <div className="bg-zinc-950/70 border border-zinc-800 rounded-xl px-3 py-2.5 text-center">
+                <p className="text-[10px] text-zinc-400 uppercase">Avance</p>
+                <p className="text-lg font-bold text-purple-400">{porcentajeCarrera}%</p>
+              </div>
+              <div className="bg-zinc-950/70 border border-zinc-800 rounded-xl px-3 py-2.5 text-center">
+                <p className="text-[10px] text-zinc-400 uppercase">Promedio</p>
+                <p className="text-lg font-bold text-blue-400">{promedio}</p>
+              </div>
+              <div className="bg-zinc-950/70 border border-zinc-800 rounded-xl px-3 py-2.5 text-center">
+                <p className="text-[10px] text-zinc-400 uppercase">Fin de cursada</p>
+                <p className="text-sm font-bold text-zinc-200 mt-1">
+                  {usuario.fin_cursada
+                    ? new Date(usuario.fin_cursada).toLocaleDateString('es-AR')
+                    : 'Sin definir'}
+                </p>
+              </div>
+            </div>
+
+            {modoSesion === 'auth' && (
+              <div className="border-t border-zinc-800 pt-4 space-y-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPassError('');
+                    setPassMsg('');
+                    setMostrarCambioPass(!mostrarCambioPass);
+                  }}
+                  className="text-xs text-blue-400 hover:underline cursor-pointer"
+                >
+                  {mostrarCambioPass ? '▲ Ocultar' : '🔒 Cambiar contraseña'}
+                </button>
+
+                {mostrarCambioPass && (
+                  <form onSubmit={cambiarPassword} className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                    <div>
+                      <label className="block text-xs text-zinc-400 mb-1">Contraseña actual</label>
+                      <input
+                        type="password"
+                        value={passActual}
+                        onChange={(e) => setPassActual(e.target.value)}
+                        className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-zinc-400 mb-1">Contraseña nueva</label>
+                      <input
+                        type="password"
+                        placeholder="Mínimo 6 caracteres"
+                        value={passNueva}
+                        onChange={(e) => setPassNueva(e.target.value)}
+                        className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-zinc-400 mb-1">Repetí la nueva</label>
+                      <input
+                        type="password"
+                        value={passNueva2}
+                        onChange={(e) => setPassNueva2(e.target.value)}
+                        className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                        required
+                      />
+                    </div>
+                    <div className="sm:col-span-3 flex flex-wrap items-center gap-3">
+                      <button
+                        type="submit"
+                        disabled={passGuardando}
+                        className="bg-zinc-800 hover:bg-zinc-700 disabled:opacity-60 text-zinc-100 text-sm font-medium px-4 py-2 rounded-lg border border-zinc-700 transition cursor-pointer"
+                      >
+                        {passGuardando ? 'Guardando...' : 'Actualizar contraseña'}
+                      </button>
+                      {passError && <span className="text-xs text-red-400">{passError}</span>}
+                      {passMsg && <span className="text-xs text-emerald-400">{passMsg}</span>}
+                    </div>
+                  </form>
+                )}
+              </div>
+            )}
+
+            {modoSesion === 'guest' && (
+              <p className="text-xs text-amber-300/90 border-t border-zinc-800 pt-4">
+                Estás en modo invitado: tus datos solo viven en este navegador. Para tener correo y
+                contraseña, usá &quot;Guardar datos en una cuenta&quot;.
+              </p>
+            )}
+          </section>
+        )}
 
         {materiaEditando && (
           <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -1721,6 +2143,38 @@ export default function Home() {
                 </button>
               </div>
             </form>
+          </div>
+        )}
+
+        {materiaPorBorrar && (
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-sm bg-zinc-900 border border-red-900/70 rounded-2xl p-6 space-y-4 shadow-2xl">
+              <h2 className="text-lg font-bold text-red-400">¿Borrar esta materia?</h2>
+              <p className="text-sm text-zinc-300">
+                <strong>{materiaPorBorrar.nombre}</strong> se borra junto con sus horarios, exámenes,
+                TPs y correlativas. No se puede deshacer.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const id = materiaPorBorrar.id;
+                    setMateriaPorBorrar(null);
+                    await eliminarMateria(id);
+                  }}
+                  className="flex-1 bg-red-600 hover:bg-red-500 text-white font-semibold text-sm py-2.5 rounded-lg transition cursor-pointer"
+                >
+                  Sí, borrar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMateriaPorBorrar(null)}
+                  className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm px-4 py-2.5 rounded-lg cursor-pointer"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1934,6 +2388,46 @@ export default function Home() {
             </button>
           )}
         </section>
+
+        {proximosVencimientos.length > 0 && (
+          <section className="bg-zinc-900/80 border border-amber-900/50 rounded-2xl p-4 sm:p-5 space-y-3">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-amber-400">
+              ⏰ Próximos 7 días
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {proximosVencimientos.map((x) => (
+                <div
+                  key={x.clave}
+                  className="flex items-center justify-between gap-3 bg-zinc-950/70 border border-zinc-800 rounded-lg px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-zinc-100 truncate">
+                      {x.tipo}: {x.titulo}
+                    </p>
+                    <p className="text-xs text-zinc-400 truncate">{x.materia}</p>
+                  </div>
+                  <span
+                    className={`shrink-0 text-xs font-semibold px-2 py-0.5 rounded ${
+                      x.dias < 0
+                        ? 'bg-red-950 text-red-300'
+                        : x.dias <= 1
+                        ? 'bg-amber-950 text-amber-300'
+                        : 'bg-zinc-800 text-zinc-300'
+                    }`}
+                  >
+                    {x.dias < 0
+                      ? `Vencido hace ${Math.abs(x.dias)}d`
+                      : x.dias === 0
+                      ? 'Hoy'
+                      : x.dias === 1
+                      ? 'Mañana'
+                      : `En ${x.dias} días`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         <header className="space-y-4 border-b border-zinc-800 pb-6">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
@@ -2323,7 +2817,7 @@ export default function Home() {
                             ✎
                           </button>
                           <button
-                            onClick={() => eliminarMateria(m.id)}
+                            onClick={() => setMateriaPorBorrar(m)}
                             className="text-zinc-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-zinc-800 cursor-pointer"
                           >
                             ✕
@@ -2637,40 +3131,43 @@ export default function Home() {
                       </div>
 
                       <div className="flex flex-wrap items-center gap-3 bg-zinc-950/80 border border-zinc-800/80 p-3 rounded-xl">
-                        <div>
-                          <label className="block text-[10px] text-zinc-400 uppercase">
-                            1° Intento
-                          </label>
-                          <input
-                            type="number"
-                            step="0.5"
-                            min="0"
-                            max="10"
-                            placeholder="-"
-                            defaultValue={ex.nota_intento_1 ?? ''}
-                            onBlur={(e) =>
-                              actualizarResultadoExamen(ex, 'nota_intento_1', e.target.value)
-                            }
-                            className="w-16 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-center mt-0.5"
-                          />
-                        </div>
+                        {(intentosDe(ex).length > 0 ? intentosDe(ex) : [null]).map((n, i) => (
+                          <div key={`${ex.id}-${i}-${n ?? ''}`}>
+                            <label className="block text-[10px] text-zinc-400 uppercase">
+                              {i + 1}° Intento
+                            </label>
+                            <input
+                              type="number"
+                              step="0.5"
+                              min="0"
+                              max="10"
+                              placeholder="-"
+                              defaultValue={n ?? ''}
+                              onBlur={(e) => cambiarIntento(ex, i, e.target.value)}
+                              className="w-16 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-center mt-0.5"
+                            />
+                          </div>
+                        ))}
 
-                        <div>
-                          <label className="block text-[10px] text-zinc-400 uppercase">
-                            2° Intento
-                          </label>
-                          <input
-                            type="number"
-                            step="0.5"
-                            min="0"
-                            max="10"
-                            placeholder="-"
-                            defaultValue={ex.nota_intento_2 ?? ''}
-                            onBlur={(e) =>
-                              actualizarResultadoExamen(ex, 'nota_intento_2', e.target.value)
-                            }
-                            className="w-16 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-center mt-0.5"
-                          />
+                        <div className="flex items-center gap-1 self-end pb-0.5">
+                          <button
+                            type="button"
+                            onClick={() => agregarIntento(ex)}
+                            title="Agregar otro intento"
+                            className="text-[11px] bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 px-2 py-1 rounded cursor-pointer"
+                          >
+                            + Intento
+                          </button>
+                          {intentosDe(ex).length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => quitarUltimoIntento(ex)}
+                              title="Quitar el último intento"
+                              className="text-[11px] bg-zinc-800 hover:bg-zinc-700 text-zinc-400 border border-zinc-700 px-2 py-1 rounded cursor-pointer"
+                            >
+                              −
+                            </button>
+                          )}
                         </div>
 
                         <div className="text-center px-2 border-l border-zinc-800">
@@ -2678,7 +3175,7 @@ export default function Home() {
                             Más Alta
                           </span>
                           <span className="text-base font-extrabold text-emerald-400">
-                            {ex.nota_vigente !== null ? ex.nota_vigente : '-'}
+                            {mejorNota(intentosDe(ex)) ?? '-'}
                           </span>
                         </div>
 
@@ -2689,7 +3186,7 @@ export default function Home() {
                           <select
                             value={ex.condicion}
                             onChange={(e) =>
-                              actualizarResultadoExamen(ex, 'condicion', e.target.value)
+                              guardarExamen(ex, intentosDe(ex), e.target.value as Examen['condicion'])
                             }
                             className={`text-xs font-semibold px-2.5 py-1 rounded-lg border cursor-pointer ${
                               coloresCondicionExamen[ex.condicion]
@@ -3200,7 +3697,10 @@ export default function Home() {
                 <label className="block text-xs text-zinc-400 mb-1">Para cursar / rendir...</label>
                 <select
                   value={corrMateriaId}
-                  onChange={(e) => setCorrMateriaId(e.target.value)}
+                  onChange={(e) => {
+                    setCorrMateriaId(e.target.value);
+                    setCorrRequisitoIds((prev) => prev.filter((id) => id !== e.target.value));
+                  }}
                   className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
                   required
                 >
@@ -3214,22 +3714,31 @@ export default function Home() {
               </div>
 
               <div>
-                <label className="block text-xs text-zinc-400 mb-1">Necesito tener...</label>
-                <select
-                  value={corrRequisitoId}
-                  onChange={(e) => setCorrRequisitoId(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                  required
-                >
-                  <option value="">Elegir correlativa...</option>
-                  {materias
-                    .filter((m) => String(m.id) !== corrMateriaId)
-                    .map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.nombre}
-                      </option>
-                    ))}
-                </select>
+                <label className="block text-xs text-zinc-400 mb-1">
+                  Necesito tener... (podés marcar varias)
+                </label>
+                <div className="max-h-40 overflow-y-auto bg-zinc-950 border border-zinc-700 rounded-lg p-2 space-y-0.5">
+                  {materias.filter((m) => String(m.id) !== corrMateriaId).length === 0 ? (
+                    <p className="text-xs text-zinc-500 px-1.5 py-1">Primero cargá materias.</p>
+                  ) : (
+                    materias
+                      .filter((m) => String(m.id) !== corrMateriaId)
+                      .map((m) => (
+                        <label
+                          key={m.id}
+                          className="flex items-center gap-2 text-sm cursor-pointer hover:bg-zinc-900 rounded px-1.5 py-1"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={corrRequisitoIds.includes(String(m.id))}
+                            onChange={() => alternarRequisito(String(m.id))}
+                            className="accent-blue-500"
+                          />
+                          <span className="truncate">{m.nombre}</span>
+                        </label>
+                      ))
+                  )}
+                </div>
               </div>
 
               <div>
@@ -3246,56 +3755,78 @@ export default function Home() {
 
               <button
                 type="submit"
-                className="bg-blue-600 hover:bg-blue-500 text-white font-medium text-sm py-2 px-4 rounded-lg transition cursor-pointer"
+                disabled={!corrMateriaId || corrRequisitoIds.length === 0}
+                className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-sm py-2 px-4 rounded-lg transition cursor-pointer"
               >
-                + Vincular
+                + Vincular{corrRequisitoIds.length > 1 ? ` (${corrRequisitoIds.length})` : ''}
               </button>
             </form>
+
+            {errorCorr && (
+              <div className="bg-red-950/60 border border-red-800 text-red-300 text-xs px-3 py-2.5 rounded-lg">
+                {errorCorr}
+              </div>
+            )}
 
             {correlativas.length === 0 ? (
               <div className="text-center py-12 bg-zinc-900/50 border border-dashed border-zinc-800 rounded-xl">
                 <p className="text-zinc-400 text-sm">Todavía no vinculaste ninguna correlativa.</p>
               </div>
             ) : (
-              <div className="space-y-2">
-                {correlativas.map((c) => {
-                  const matReqActual = materias.find((m) => m.id === c.correlativa_id);
-                  const estadoActual = matReqActual ? matReqActual.estado : c.correlativa_estado;
-                  const cumplida =
-                    c.tipo_requisito === 'aprobada'
-                      ? estadoActual === 'aprobada'
-                      : estadoActual === 'regular' || estadoActual === 'aprobada';
+              <div className="space-y-3">
+                {correlativasPorMateria.map((g) => {
+                  const cumplidas = g.reqs.filter(cumpleRequisito).length;
+                  const habilitada = cumplidas === g.reqs.length;
 
                   return (
                     <div
-                      key={`${c.materia_id}-${c.correlativa_id}`}
-                      className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                      key={g.materia_id}
+                      className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3"
                     >
-                      <div className="text-sm">
-                        <span className="font-semibold text-zinc-100">{c.materia_nombre}</span>
-                        <span className="text-zinc-500 mx-2">requiere</span>
-                        <span className="font-medium text-blue-400">{c.correlativa_nombre}</span>
-                        <span className="text-xs ml-2 px-2 py-0.5 rounded bg-zinc-800 text-zinc-300">
-                          {c.tipo_requisito}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h3 className="text-base font-semibold text-zinc-100">{g.nombre}</h3>
+                          <p className="text-xs text-zinc-400">
+                            Requiere {g.reqs.length} materia{g.reqs.length === 1 ? '' : 's'}
+                          </p>
+                        </div>
+                        <span
+                          className={`text-xs px-2.5 py-1 rounded-lg ${
+                            habilitada ? 'bg-emerald-950 text-emerald-400' : 'bg-red-950 text-red-400'
+                          }`}
+                        >
+                          {habilitada ? 'Habilitada ✓' : `Faltan ${g.reqs.length - cumplidas}`}
                         </span>
                       </div>
 
-                      <div className="flex items-center justify-end gap-3">
-                        <span
-                          className={`text-xs px-2.5 py-1 rounded-lg ${
-                            cumplida
-                              ? 'bg-emerald-950 text-emerald-400'
-                              : 'bg-red-950 text-red-400'
-                          }`}
-                        >
-                          {cumplida ? 'Cumplida ✓' : `Pendiente (${estadoActual})`}
-                        </span>
-                        <button
-                          onClick={() => eliminarCorrelativa(c.materia_id, c.correlativa_id)}
-                          className="text-zinc-500 hover:text-red-400 p-1 rounded hover:bg-zinc-800 cursor-pointer"
-                        >
-                          ✕
-                        </button>
+                      <div className="flex flex-wrap gap-2">
+                        {g.reqs.map((c) => {
+                          const ok = cumpleRequisito(c);
+                          return (
+                            <div
+                              key={`${c.materia_id}-${c.correlativa_id}`}
+                              className={`flex items-center gap-2 text-xs px-2.5 py-1.5 rounded-lg border ${
+                                ok
+                                  ? 'bg-emerald-950/50 border-emerald-800 text-emerald-300'
+                                  : 'bg-red-950/40 border-red-900/60 text-red-300'
+                              }`}
+                            >
+                              <span>{ok ? '✓' : '•'}</span>
+                              <span className="font-medium">{c.correlativa_nombre}</span>
+                              <span className="opacity-70">
+                                ({c.tipo_requisito === 'aprobada' ? 'aprobada' : 'regular'})
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => eliminarCorrelativa(c.materia_id, c.correlativa_id)}
+                                title="Quitar esta correlativa"
+                                className="opacity-60 hover:opacity-100 cursor-pointer"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   );

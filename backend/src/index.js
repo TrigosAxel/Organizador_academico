@@ -10,6 +10,8 @@ const {
   obtenerPerfil,
   actualizarFinCursada,
   actualizarCarrera,
+  actualizarPerfil,
+  cambiarPassword,
   migrarInvitado,
   solicitarRecuperacion,
   resetearPassword
@@ -39,6 +41,8 @@ app.post('/api/auth/reset-password', resetearPassword);
 app.get('/api/auth/me', requireAuth, obtenerPerfil);
 app.put('/api/auth/fin-cursada', requireAuth, actualizarFinCursada);
 app.put('/api/auth/carrera', requireAuth, actualizarCarrera);
+app.put('/api/auth/perfil', requireAuth, actualizarPerfil);
+app.put('/api/auth/password', requireAuth, cambiarPassword);
 app.post('/api/auth/migrar-invitado', requireAuth, migrarInvitado);
 
 // Todo lo que se define de acá para abajo (materias, horarios, etc.) exige token
@@ -241,7 +245,18 @@ crud('horarios', 'horarios', (b) => ({
 // ---------------------------------------------------------------
 // EXÁMENES (parciales / finales)
 // ---------------------------------------------------------------
-crud('examenes', 'examenes');
+// "intentos" es una lista de notas (jsonb), sin límite de cantidad.
+// Se mantienen sincronizadas nota_intento_1 y nota_intento_2 por compatibilidad.
+crud('examenes', 'examenes', (b) => {
+  const out = { ...b };
+  if (Array.isArray(b.intentos)) {
+    const lista = b.intentos.map((n) => (n === '' || n === null || n === undefined || Number.isNaN(Number(n)) ? null : Number(n)));
+    out.intentos = JSON.stringify(lista);
+    out.nota_intento_1 = lista[0] ?? null;
+    out.nota_intento_2 = lista[1] ?? null;
+  }
+  return out;
+});
 
 // ---------------------------------------------------------------
 // TRABAJOS PRÁCTICOS  (la ruta es /api/tps, la tabla trabajos_practicos)
@@ -268,9 +283,71 @@ app.get('/api/correlativas', async (req, res) => {
 
 app.post('/api/correlativas', async (req, res) => {
   try {
-    const body = { ...req.body, tipo_requisito: req.body.tipo_requisito ?? req.body.condicion };
+    const uid = usuarioId(req);
+    const tipo = req.body.tipo_requisito ?? req.body.condicion ?? 'regular';
+
+    // Varias correlativas de una sola vez: { materia_id, correlativa_ids: [..], tipo_requisito }
+    if (Array.isArray(req.body.correlativa_ids)) {
+      const materiaId = Number(req.body.materia_id);
+      const ids = [...new Set(req.body.correlativa_ids.map(Number))].filter(
+        (n) => Number.isInteger(n) && n !== materiaId
+      );
+      if (!materiaId || !ids.length) {
+        return res.status(400).json({ error: 'Elegí la materia y al menos una correlativa' });
+      }
+
+      const client = await db.connect();
+      try {
+        await client.query('BEGIN');
+
+        // Solo se aceptan materias que pertenecen al usuario
+        const propias = await client.query(
+          'SELECT id FROM materias WHERE usuario_id = $1 AND id = ANY($2)',
+          [uid, [materiaId, ...ids]]
+        );
+        const validos = new Set(propias.rows.map((r) => r.id));
+        if (!validos.has(materiaId)) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: 'Materia no encontrada' });
+        }
+        const aInsertar = ids.filter((id) => validos.has(id));
+
+        const cols = await columnasDe('correlativas');
+        const conUsuario = cols.includes('usuario_id');
+
+        // Si ya existía el vínculo, se reemplaza (así se puede cambiar la condición)
+        await client.query(
+          'DELETE FROM correlativas WHERE materia_id = $1 AND correlativa_id = ANY($2)',
+          [materiaId, aInsertar]
+        );
+        for (const cid of aInsertar) {
+          if (conUsuario) {
+            await client.query(
+              'INSERT INTO correlativas (usuario_id, materia_id, correlativa_id, tipo_requisito) VALUES ($1, $2, $3, $4)',
+              [uid, materiaId, cid, tipo]
+            );
+          } else {
+            await client.query(
+              'INSERT INTO correlativas (materia_id, correlativa_id, tipo_requisito) VALUES ($1, $2, $3)',
+              [materiaId, cid, tipo]
+            );
+          }
+        }
+
+        await client.query('COMMIT');
+        return res.status(201).json({ mensaje: 'Correlativas vinculadas', cantidad: aInsertar.length });
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+
+    // Una sola correlativa (formato anterior)
+    const body = { ...req.body, tipo_requisito: tipo };
     const { cols, data } = await datosPermitidos('correlativas', body);
-    if (cols.includes('usuario_id')) data.usuario_id = usuarioId(req);
+    if (cols.includes('usuario_id')) data.usuario_id = uid;
     const r = await insertar('correlativas', data);
     res.status(201).json(r.rows[0]);
   } catch (err) { responderError(res, err); }
