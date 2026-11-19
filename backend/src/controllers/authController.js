@@ -29,17 +29,19 @@ const enviarCorreo = async ({ to, subject, html }) => {
 const generarToken = (usuario) =>
   jwt.sign({ id: usuario.id }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
+// Datos del usuario que se le devuelven al frontend (nunca el hash de la contraseña).
+// Usa ?? null para que no falle aunque alguna columna opcional todavía no exista.
 const usuarioPublico = (u) => ({
   id: u.id,
   nombre: u.nombre,
-  apellido: u.apellido ?? null,          // NUEVO
   email: u.email,
   fin_cursada: u.fin_cursada ?? null,
   carrera: u.carrera ?? null,
-  universidad: u.universidad ?? null,    // NUEVO
-  anio_ingreso: u.anio_ingreso ?? null,  // NUEVO
-  cuatrimestre_actual: u.cuatrimestre_actual ?? null, // NUEVO
-  foto: u.foto ?? null
+  foto: u.foto ?? null,
+  apellido: u.apellido ?? null,
+  universidad: u.universidad ?? null,
+  anio_ingreso: u.anio_ingreso ?? null,
+  cuatrimestre_actual: u.cuatrimestre_actual ?? null
 });
 
 // La foto se guarda como imagen chica en base64 (el frontend la reduce a 256x256)
@@ -195,6 +197,30 @@ const actualizarPerfil = async (req, res) => {
       agregar('carrera', String(body.carrera || '').trim().slice(0, 120) || null);
     }
 
+    if ('apellido' in body) {
+      agregar('apellido', String(body.apellido || '').trim().slice(0, 80) || null);
+    }
+
+    if ('universidad' in body) {
+      agregar('universidad', String(body.universidad || '').trim().slice(0, 120) || null);
+    }
+
+    if ('anio_ingreso' in body) {
+      if (body.anio_ingreso === null || body.anio_ingreso === '') {
+        agregar('anio_ingreso', null);
+      } else {
+        const anio = Number(body.anio_ingreso);
+        if (!Number.isInteger(anio) || anio < 1950 || anio > new Date().getFullYear() + 1) {
+          return res.status(400).json({ error: 'El año de ingreso no es válido' });
+        }
+        agregar('anio_ingreso', anio);
+      }
+    }
+
+    if ('cuatrimestre_actual' in body) {
+      agregar('cuatrimestre_actual', String(body.cuatrimestre_actual || '').trim().slice(0, 30) || null);
+    }
+
     if ('foto' in body) {
       if (body.foto === null) {
         agregar('foto', null);
@@ -204,19 +230,7 @@ const actualizarPerfil = async (req, res) => {
         return res.status(400).json({ error: 'La foto no es válida o pesa demasiado' });
       }
     }
-    if ('apellido' in body) {
-      agregar('apellido', String(body.apellido || '').trim().slice(0, 80) || null);
-    }
-    if ('universidad' in body) {
-      agregar('universidad', String(body.universidad || '').trim().slice(0, 150) || null);
-    }
-    if ('anio_ingreso' in body) {
-      const anio = parseInt(body.anio_ingreso);
-      agregar('anio_ingreso', isNaN(anio) ? null : anio);
-    }
-    if ('cuatrimestre_actual' in body) {
-      agregar('cuatrimestre_actual', String(body.cuatrimestre_actual || '').trim().slice(0, 10) || null);
-    }
+
     if (!sets.length) return res.status(400).json({ error: 'No hay cambios para guardar' });
 
     valores.push(req.usuarioId);
@@ -230,9 +244,80 @@ const actualizarPerfil = async (req, res) => {
   } catch (err) {
     console.error('Error al actualizar perfil:', err);
     if (err.code === '42703') {
-      return res.status(500).json({ error: 'Falta la columna "foto" en la base de datos. Corré el SQL de la foto en Supabase.' });
+      return res.status(500).json({ error: 'Falta una columna en la base de datos. Corré el SQL de migración de AulaTrack en Supabase.' });
     }
     res.status(500).json({ error: 'Error al guardar los cambios del perfil' });
+  }
+};
+
+// ---------------------------------------------------------------
+// COMENTARIOS PARA LOS DESARROLLADORES (requiere token)
+// ---------------------------------------------------------------
+const TIPOS_COMENTARIO = ['sugerencia', 'error', 'otro'];
+
+const escaparHtml = (texto) =>
+  String(texto ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+const enviarComentario = async (req, res) => {
+  try {
+    const tipo = TIPOS_COMENTARIO.includes(req.body?.tipo) ? req.body.tipo : 'otro';
+    const mensaje = String(req.body?.mensaje || '').trim();
+
+    if (mensaje.length < 5) {
+      return res.status(400).json({ error: 'Contanos un poco más (mínimo 5 caracteres)' });
+    }
+    if (mensaje.length > 2000) {
+      return res.status(400).json({ error: 'El comentario es demasiado largo (máximo 2000 caracteres)' });
+    }
+
+    // Tope simple para evitar spam: 5 comentarios por hora y por usuario
+    const reciente = await pool.query(
+      "SELECT COUNT(*)::int AS n FROM comentarios WHERE usuario_id = $1 AND created_at > NOW() - INTERVAL '1 hour'",
+      [req.usuarioId]
+    );
+    if (reciente.rows[0].n >= 5) {
+      return res.status(429).json({ error: 'Enviaste varios comentarios seguidos. Probá de nuevo en un rato.' });
+    }
+
+    await pool.query('INSERT INTO comentarios (usuario_id, tipo, mensaje) VALUES ($1, $2, $3)', [
+      req.usuarioId,
+      tipo,
+      mensaje
+    ]);
+
+    // Aviso por correo al equipo. Si falla, el comentario igual queda guardado.
+    try {
+      if (process.env.BREVO_API_KEY && process.env.BREVO_SENDER_EMAIL) {
+        const u = await pool.query('SELECT nombre, email FROM usuarios WHERE id = $1', [req.usuarioId]);
+        const quien = u.rows[0] || {};
+        await enviarCorreo({
+          to: process.env.COMENTARIOS_EMAIL || process.env.BREVO_SENDER_EMAIL,
+          subject: `AulaTrack · nuevo comentario (${tipo})`,
+          html: `
+            <div style="font-family: Arial, sans-serif; color: #333;">
+              <p><strong>${escaparHtml(quien.nombre)}</strong> (${escaparHtml(quien.email)}) dejó un comentario de tipo <strong>${escaparHtml(tipo)}</strong>:</p>
+              <blockquote style="border-left: 4px solid #2563eb; margin: 12px 0; padding: 8px 14px; background: #f4f4f5;">
+                ${escaparHtml(mensaje).replace(/\n/g, '<br>')}
+              </blockquote>
+            </div>
+          `
+        });
+      }
+    } catch (errCorreo) {
+      console.error('No se pudo avisar el comentario por correo:', errCorreo.message);
+    }
+
+    res.status(201).json({ mensaje: '¡Gracias! Recibimos tu comentario.' });
+  } catch (err) {
+    console.error('Error al guardar comentario:', err);
+    if (err.code === '42P01') {
+      return res.status(500).json({ error: 'Falta la tabla de comentarios. Corré el SQL de migración de AulaTrack en Supabase.' });
+    }
+    res.status(500).json({ error: 'No se pudo guardar el comentario' });
   }
 };
 
@@ -491,6 +576,7 @@ module.exports = {
   actualizarFinCursada,
   actualizarCarrera,
   actualizarPerfil,
+  enviarComentario,
   cambiarPassword,
   migrarInvitado,
   solicitarRecuperacion,

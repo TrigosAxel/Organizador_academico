@@ -11,18 +11,12 @@ const {
   actualizarFinCursada,
   actualizarCarrera,
   actualizarPerfil,
+  enviarComentario,
   cambiarPassword,
   migrarInvitado,
   solicitarRecuperacion,
   resetearPassword
 } = require('./controllers/authController');
-
-const {
-  obtenerConfiguracion,
-  actualizarConfiguracion,
-  resetearConfiguracion,
-  crearComentario
-} = require('./controllers/configuracionController');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -51,14 +45,6 @@ app.put('/api/auth/carrera', requireAuth, actualizarCarrera);
 app.put('/api/auth/perfil', requireAuth, actualizarPerfil);
 app.put('/api/auth/password', requireAuth, cambiarPassword);
 app.post('/api/auth/migrar-invitado', requireAuth, migrarInvitado);
-// ---------------------------------------------------------------
-// CONFIGURACIÓN Y COMENTARIOS
-// ---------------------------------------------------------------
-app.get('/api/configuracion', requireAuth, obtenerConfiguracion);
-app.put('/api/configuracion', requireAuth, actualizarConfiguracion);
-app.post('/api/configuracion/reset', requireAuth, resetearConfiguracion);
-
-app.post('/api/comentarios', requireAuth, crearComentario);
 
 // Todo lo que se define de acá para abajo (materias, horarios, etc.) exige token
 app.use('/api', requireAuth);
@@ -391,6 +377,9 @@ app.delete('/api/correlativas/:id', async (req, res) => {
     res.json({ mensaje: 'Eliminado' });
   } catch (err) { responderError(res, err); }
 });
+
+// Comentarios para los desarrolladores
+app.post('/api/comentarios', enviarComentario);
 
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en http://localhost:${PORT}`);

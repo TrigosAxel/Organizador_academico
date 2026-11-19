@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import { TEMA_CLARO_CSS } from './temaClaro';
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || '',
@@ -15,6 +16,10 @@ interface Usuario {
   fin_cursada: string | null;
   carrera?: string | null;
   foto?: string | null;
+  apellido?: string | null;
+  universidad?: string | null;
+  anio_ingreso?: number | null;
+  cuatrimestre_actual?: string | null;
 }
 
 interface Materia {
@@ -30,6 +35,9 @@ interface Materia {
   modalidad_aprobacion?: string | null;
   nota_final?: number | null;
   asistencia_minima?: number;
+  color?: string | null;
+  nota_promocion?: number | string | null;
+  nota_regularidad?: number | string | null;
 }
 interface Horario {
   id?: number;
@@ -130,6 +138,66 @@ const procesarFoto = (file: File): Promise<string> =>
     reader.readAsDataURL(file);
   });
 
+const APP_NOMBRE = 'AulaTrack';
+const APP_SUBTITULO = 'Organizador Académico';
+const APP_LEMA = 'Seguimiento de tu vida académica';
+const APP_VERSION = '1.1';
+
+interface Config {
+  tema: 'claro' | 'oscuro' | 'auto';
+  fuente: 'chica' | 'normal' | 'grande';
+  mostrarEstadisticas: boolean;
+  ordenMaterias: 'nombre' | 'estado' | 'cuatrimestre';
+  avisosActivos: boolean;
+  antelacionDias: number;
+  avisarExamenes: boolean;
+  avisarTps: boolean;
+  notaPromocion: number;
+  notaRegularidad: number;
+  asistenciaMinima: number;
+}
+
+const CONFIG_POR_DEFECTO: Config = {
+  tema: 'claro',
+  fuente: 'normal',
+  mostrarEstadisticas: true,
+  ordenMaterias: 'nombre',
+  avisosActivos: true,
+  antelacionDias: 7,
+  avisarExamenes: true,
+  avisarTps: true,
+  notaPromocion: 7,
+  notaRegularidad: 4,
+  asistenciaMinima: 75,
+};
+
+const CLAVE_CONFIG = 'aulatrack_config';
+const TAMANOS_FUENTE = { chica: '14px', normal: '16px', grande: '18px' };
+const PALETA_MATERIAS = [
+  '#3b82f6',
+  '#8b5cf6',
+  '#ec4899',
+  '#ef4444',
+  '#f97316',
+  '#eab308',
+  '#22c55e',
+  '#14b8a6',
+  '#06b6d4',
+  '#64748b',
+];
+const ORDEN_ESTADO = ['cursando', 'regular', 'pendiente', 'aprobada', 'desaprobada'];
+const ORDEN_CUATRI: Record<string, number> = { '1ro': 1, '2do': 2, Anual: 3 };
+
+const cargarConfig = (): Config => {
+  if (typeof window === 'undefined') return CONFIG_POR_DEFECTO;
+  try {
+    const guardada = localStorage.getItem(CLAVE_CONFIG);
+    return guardada ? { ...CONFIG_POR_DEFECTO, ...JSON.parse(guardada) } : CONFIG_POR_DEFECTO;
+  } catch {
+    return CONFIG_POR_DEFECTO;
+  }
+};
+
 const MESES = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
@@ -197,6 +265,9 @@ export default function Home() {
     asistencia_minima: '75',
     clases_totales: '0',
     inasistencias: '0',
+    nota_promocion: '',
+    nota_regularidad: '',
+    color: '',
   });
   const [errorEdit, setErrorEdit] = useState('');
   const [mostrarReset, setMostrarReset] = useState(false);
@@ -205,12 +276,9 @@ export default function Home() {
   const [reseteando, setReseteando] = useState(false);
   // Panel de usuario
   const [panelUsuarioAbierto, setPanelUsuarioAbierto] = useState(false);
-  const [perfilNombre, setPerfilNombre] = useState('');
-  const [perfilCarrera, setPerfilCarrera] = useState('');
   const [perfilMsg, setPerfilMsg] = useState('');
   const [perfilError, setPerfilError] = useState('');
   const [perfilGuardando, setPerfilGuardando] = useState(false);
-  const [mostrarCambioPass, setMostrarCambioPass] = useState(false);
   const [passActual, setPassActual] = useState('');
   const [passNueva, setPassNueva] = useState('');
   const [passNueva2, setPassNueva2] = useState('');
@@ -219,6 +287,26 @@ export default function Home() {
   const [passGuardando, setPassGuardando] = useState(false);
   const [materiaPorBorrar, setMateriaPorBorrar] = useState<Materia | null>(null);
   const [autenticando, setAutenticando] = useState(false);
+  const [verPassword, setVerPassword] = useState(false);
+
+  // Configuración de la app (se guarda en este dispositivo)
+  const [cfg, setCfg] = useState<Config>(cargarConfig);
+  const [vistaApp, setVistaApp] = useState<'principal' | 'config' | 'academicos'>('principal');
+  const [seccionConfig, setSeccionConfig] = useState<string | null>(null);
+  const [confirmarReinicioCfg, setConfirmarReinicioCfg] = useState(false);
+  const [datosAcad, setDatosAcad] = useState({
+    nombre: '',
+    apellido: '',
+    universidad: '',
+    carrera: '',
+    anio_ingreso: '',
+    cuatrimestre_actual: '',
+  });
+  const [comTipo, setComTipo] = useState('sugerencia');
+  const [comMensaje, setComMensaje] = useState('');
+  const [comMsg, setComMsg] = useState('');
+  const [comError, setComError] = useState('');
+  const [comEnviando, setComEnviando] = useState(false);
 
   const [mostrarModalMigracion, setMostrarModalMigracion] = useState(false);
   const [migrando, setMigrando] = useState(false);
@@ -326,6 +414,33 @@ export default function Home() {
     if (Array.isArray(dataExam)) setExamenes(dataExam);
     if (Array.isArray(dataTps)) setTps(dataTps);
   }, []);
+
+  // Estilos del modo claro (se inyectan una sola vez) y título de la pestaña
+  useEffect(() => {
+    let estilo = document.getElementById('aulatrack-tema') as HTMLStyleElement | null;
+    if (!estilo) {
+      estilo = document.createElement('style');
+      estilo.id = 'aulatrack-tema';
+      document.head.appendChild(estilo);
+    }
+    estilo.textContent = TEMA_CLARO_CSS;
+    document.title = `${APP_NOMBRE} | ${APP_SUBTITULO}`;
+  }, []);
+
+  // Aplica el tema (claro / oscuro / automático) y el tamaño de letra
+  useEffect(() => {
+    const html = document.documentElement;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const aplicar = () => {
+      const oscuro = cfg.tema === 'oscuro' || (cfg.tema === 'auto' && mq.matches);
+      html.classList.toggle('tema-claro', !oscuro);
+      html.style.fontSize = TAMANOS_FUENTE[cfg.fuente];
+    };
+    aplicar();
+    if (cfg.tema !== 'auto') return undefined;
+    mq.addEventListener('change', aplicar);
+    return () => mq.removeEventListener('change', aplicar);
+  }, [cfg.tema, cfg.fuente]);
 
   useEffect(() => {
     let activo = true;
@@ -495,7 +610,7 @@ export default function Home() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `avance_academico_${usuario?.nombre || 'estudiante'}.csv`);
+    link.setAttribute('download', `aulatrack_avance_${usuario?.nombre || 'estudiante'}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -522,7 +637,7 @@ export default function Home() {
     ventana.document.write(`
       <html>
         <head>
-          <title>Avance Académico - ${usuario?.nombre}</title>
+          <title>AulaTrack | Avance Académico - ${usuario?.nombre}</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 32px; color: #111; }
             h1 { margin-bottom: 4px; }
@@ -533,7 +648,7 @@ export default function Home() {
           </style>
         </head>
         <body>
-          <h1>Resumen de Avance Académico</h1>
+          <h1>AulaTrack · Resumen de Avance Académico</h1>
           <p>Estudiante: <strong>${usuario?.nombre}</strong>${usuario?.carrera ? ` · Carrera: <strong>${usuario.carrera}</strong>` : ''} · Fecha: ${new Date().toLocaleDateString()}</p>
           <div class="resumen">
             <div><strong>Materias Aprobadas:</strong> ${aprobadas.length} / ${materias.length} (${porcentajeCarrera}%)</div>
@@ -707,6 +822,9 @@ export default function Home() {
       asistencia_minima: String(m.asistencia_minima ?? 75),
       clases_totales: String(m.clases_totales ?? 0),
       inasistencias: String(m.inasistencias ?? 0),
+      nota_promocion: aNumero(m.nota_promocion) !== null ? String(aNumero(m.nota_promocion)) : '',
+      nota_regularidad: aNumero(m.nota_regularidad) !== null ? String(aNumero(m.nota_regularidad)) : '',
+      color: m.color || '',
     });
   };
 
@@ -735,6 +853,13 @@ export default function Home() {
     if (aprobada && nota !== null && (Number.isNaN(nota) || nota < 1 || nota > 10))
       return setErrorEdit('La nota debe estar entre 1 y 10');
 
+    const notaPromo = aNumero(formEdit.nota_promocion);
+    const notaRegular = aNumero(formEdit.nota_regularidad);
+    if ((notaPromo !== null && (notaPromo < 1 || notaPromo > 10)) || (notaRegular !== null && (notaRegular < 1 || notaRegular > 10)))
+      return setErrorEdit('Las notas de promoción y regularidad deben estar entre 1 y 10');
+    if (notaPromo !== null && notaRegular !== null && notaRegular > notaPromo)
+      return setErrorEdit('La nota para regularizar no puede ser mayor que la de promocionar');
+
     await actualizarMateria({
       ...materiaEditando,
       nombre: nombreLimpio,
@@ -746,6 +871,9 @@ export default function Home() {
       asistencia_minima: asistMin,
       clases_totales: clases,
       inasistencias: faltas,
+      nota_promocion: notaPromo,
+      nota_regularidad: notaRegular,
+      color: formEdit.color || null,
     });
     setMateriaEditando(null);
   };
@@ -784,22 +912,20 @@ export default function Home() {
   };
 
   const alternarPanelUsuario = () => {
-    if (!panelUsuarioAbierto && usuario) {
-      setPerfilNombre(usuario.nombre);
-      setPerfilCarrera(usuario.carrera || '');
-      setPerfilMsg('');
-      setPerfilError('');
-      setMostrarCambioPass(false);
-    }
+    setPerfilMsg('');
+    setPerfilError('');
     setPanelUsuarioAbierto(!panelUsuarioAbierto);
   };
 
   // Guarda cambios del perfil (nombre, carrera y/o foto)
-  const guardarPerfil = async (cambios: {
-    nombre?: string;
-    carrera?: string | null;
-    foto?: string | null;
-  }) => {
+  const guardarPerfil = async (
+    cambios: Partial<
+      Pick<
+        Usuario,
+        'nombre' | 'apellido' | 'universidad' | 'carrera' | 'anio_ingreso' | 'cuatrimestre_actual' | 'foto'
+      >
+    >
+  ) => {
     if (!usuario) return;
     setPerfilError('');
     setPerfilMsg('');
@@ -832,14 +958,91 @@ export default function Home() {
     }
   };
 
-  const guardarDatosPerfil = (e: React.FormEvent) => {
+  const actualizarConfig = (parcial: Partial<Config>) => {
+    const nueva = { ...cfg, ...parcial };
+    setCfg(nueva);
+    try {
+      localStorage.setItem(CLAVE_CONFIG, JSON.stringify(nueva));
+    } catch {
+      // si el navegador no deja guardar, la configuración vale solo para esta sesión
+    }
+  };
+
+  const reiniciarConfig = () => {
+    setCfg(CONFIG_POR_DEFECTO);
+    try {
+      localStorage.removeItem(CLAVE_CONFIG);
+    } catch {
+      // nada que hacer
+    }
+    setConfirmarReinicioCfg(false);
+  };
+
+  const abrirDatosAcademicos = () => {
+    if (!usuario) return;
+    setDatosAcad({
+      nombre: usuario.nombre,
+      apellido: usuario.apellido || '',
+      universidad: usuario.universidad || '',
+      carrera: usuario.carrera || '',
+      anio_ingreso: usuario.anio_ingreso ? String(usuario.anio_ingreso) : '',
+      cuatrimestre_actual: usuario.cuatrimestre_actual || '',
+    });
+    setPerfilMsg('');
+    setPerfilError('');
+    setVistaApp('academicos');
+  };
+
+  const guardarDatosAcademicos = async (e: React.FormEvent) => {
     e.preventDefault();
-    const nombre = perfilNombre.trim();
+    const nombre = datosAcad.nombre.trim();
     if (!nombre) {
       setPerfilError('El nombre no puede estar vacío');
       return;
     }
-    guardarPerfil({ nombre, carrera: perfilCarrera.trim() || null });
+    const anio = datosAcad.anio_ingreso === '' ? null : Number(datosAcad.anio_ingreso);
+    if (anio !== null && (!Number.isInteger(anio) || anio < 1950 || anio > new Date().getFullYear() + 1)) {
+      setPerfilError('El año de ingreso no es válido');
+      return;
+    }
+    await guardarPerfil({
+      nombre,
+      apellido: datosAcad.apellido.trim() || null,
+      universidad: datosAcad.universidad.trim() || null,
+      carrera: datosAcad.carrera.trim() || null,
+      anio_ingreso: anio,
+      cuatrimestre_actual: datosAcad.cuatrimestre_actual || null,
+    });
+  };
+
+  const enviarComentario = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setComError('');
+    setComMsg('');
+    if (comMensaje.trim().length < 5) {
+      setComError('Contanos un poco más (mínimo 5 caracteres)');
+      return;
+    }
+    if (!token) return;
+    setComEnviando(true);
+    try {
+      const res = await fetch(`${BASE_API}/comentarios`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ tipo: comTipo, mensaje: comMensaje.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setComError(data.error || 'No se pudo enviar el comentario');
+        return;
+      }
+      setComMsg(data.mensaje || '¡Gracias! Recibimos tu comentario.');
+      setComMensaje('');
+    } catch {
+      setComError('No se pudo conectar con el servidor');
+    } finally {
+      setComEnviando(false);
+    }
   };
 
   const cambiarFoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1063,7 +1266,10 @@ export default function Home() {
 
     let condicion = condicionManual ?? examen.condicion;
     if (!condicionManual && condicion !== 'promociona') {
-      condicion = vigente === null ? 'pendiente' : vigente >= 6 ? 'aprobado' : 'desaprobado';
+      // el umbral para regularizar sale de las reglas de la materia (o de las generales)
+      const materiaDelExamen = materias.find((m) => m.id === examen.materia_id);
+      const notaMinima = materiaDelExamen ? reglasDe(materiaDelExamen).regular : cfg.notaRegularidad;
+      condicion = vigente === null ? 'pendiente' : vigente >= notaMinima ? 'aprobado' : 'desaprobado';
     }
 
     if (modoSesion === 'guest') {
@@ -1081,6 +1287,7 @@ export default function Home() {
       );
       setExamenes(nuevos);
       guardarGuestLocal({ examenes: nuevos });
+      await sincronizarPromocion(examen, condicion, vigente);
       return;
     }
 
@@ -1090,7 +1297,27 @@ export default function Home() {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ intentos, condicion }),
     });
-    cargarDatosAuth(token);
+    if (!(await sincronizarPromocion(examen, condicion, vigente))) cargarDatosAuth(token);
+  };
+
+  // Si un parcial pasa a "Promociona", la materia queda aprobada por promoción.
+  // Devuelve true si actualizó la materia (en ese caso ya se recargaron los datos).
+  const sincronizarPromocion = async (
+    examen: Examen,
+    condicion: Examen['condicion'],
+    vigente: number | null
+  ) => {
+    if (condicion !== 'promociona' || examen.condicion === 'promociona') return false;
+    const materia = materias.find((m) => m.id === examen.materia_id);
+    if (!materia) return false;
+    if (materia.estado === 'aprobada' && materia.modalidad_aprobacion === 'promocionada') return false;
+    await actualizarMateria({
+      ...materia,
+      estado: 'aprobada',
+      modalidad_aprobacion: 'promocionada',
+      nota_final: vigente ?? materia.nota_final ?? null,
+    });
+    return true;
   };
 
   const cambiarIntento = async (examen: Examen, indice: number, valor: string) => {
@@ -1405,7 +1632,7 @@ export default function Home() {
       <main className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-4 sm:p-6">
         <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-6 sm:p-8 space-y-6 shadow-2xl">
           <div className="text-center space-y-1">
-            <h1 className="text-2xl font-bold tracking-tight">Organizador Académico</h1>
+            <h1 className="text-2xl font-bold tracking-tight">{APP_NOMBRE}</h1>
             <p className="text-sm text-zinc-400">
               {vistaRecuperar === 'olvide' ? 'Recuperá tu contraseña' : 'Elegí tu nueva contraseña'}
             </p>
@@ -1498,159 +1725,229 @@ export default function Home() {
   if (!modoSesion || !usuario) {
     return (
       <main className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-4 sm:p-6">
-        <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-6 sm:p-8 space-y-6 shadow-2xl">
-          <div className="text-center space-y-1">
-            <h1 className="text-2xl font-bold tracking-tight">Organizador Académico</h1>
-            <p className="text-sm text-zinc-400">
-              Gestioná tu carrera, horarios, asistencias, parciales y correlativas
-            </p>
-          </div>
-
-          <div className="grid grid-cols-2 bg-zinc-950 p-1 rounded-xl border border-zinc-800">
-            <button
-              type="button"
-              onClick={() => {
-                setModoAuth('login');
-                setAuthError('');
-              }}
-              className={`py-2 text-xs font-semibold rounded-lg transition cursor-pointer ${
-                modoAuth === 'login' ? 'bg-blue-600 text-white' : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              Iniciar Sesión
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setModoAuth('register');
-                setAuthError('');
-              }}
-              className={`py-2 text-xs font-semibold rounded-lg transition cursor-pointer ${
-                modoAuth === 'register'
-                  ? 'bg-blue-600 text-white'
-                  : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              Crear Cuenta
-            </button>
-          </div>
-
-          {authError && (
-            <div className="bg-red-950/60 border border-red-800 text-red-300 text-xs px-3 py-2.5 rounded-lg">
-              {authError}
-            </div>
-          )}
-
-          <form onSubmit={(e) => manejarAuth(e, false)} className="space-y-4">
-            {modoAuth === 'register' && (
+        <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-x-14 lg:gap-y-10 items-center">
+          {/* Marca */}
+          <div className="space-y-4 text-center lg:text-left lg:col-start-1 lg:row-start-1 lg:self-end">
+            <div className="flex flex-col lg:flex-row items-center gap-4">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/logo.png"
+                alt={`Logo de ${APP_NOMBRE}`}
+                className="h-20 w-20 sm:h-24 sm:w-24 rounded-2xl shadow-xl border border-zinc-700 object-cover"
+              />
               <div>
-                <label className="block text-xs text-zinc-400 mb-1">Tu nombre</label>
+                <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight">{APP_NOMBRE}</h1>
+                <p className="text-xs sm:text-sm uppercase tracking-[0.22em] text-zinc-400 mt-1">
+                  {APP_SUBTITULO}
+                </p>
+              </div>
+            </div>
+            <p className="text-base sm:text-lg text-zinc-300">{APP_LEMA}</p>
+          </div>
+
+          {/* Formulario */}
+          <div className="w-full max-w-md mx-auto lg:mx-0 lg:ml-auto lg:col-start-2 lg:row-start-1 lg:row-span-2 bg-zinc-900 border border-zinc-800 rounded-2xl p-6 sm:p-8 space-y-6 shadow-2xl">
+            <div className="grid grid-cols-2 bg-zinc-950 p-1 rounded-xl border border-zinc-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setModoAuth('login');
+                  setAuthError('');
+                }}
+                className={`py-2 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                  modoAuth === 'login' ? 'bg-blue-600 text-white' : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Iniciar Sesión
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setModoAuth('register');
+                  setAuthError('');
+                }}
+                className={`py-2 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                  modoAuth === 'register'
+                    ? 'bg-blue-600 text-white'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Crear Cuenta
+              </button>
+            </div>
+
+            {authError && (
+              <div className="bg-red-950/60 border border-red-800 text-red-300 text-xs px-3 py-2.5 rounded-lg">
+                {authError}
+              </div>
+            )}
+
+            <form onSubmit={(e) => manejarAuth(e, false)} className="space-y-4">
+              {modoAuth === 'register' && (
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Tu nombre</label>
+                  <input
+                    type="text"
+                    placeholder="Ej: Axel"
+                    value={authNombre}
+                    onChange={(e) => setAuthNombre(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm"
+                    required
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">Correo electrónico</label>
                 <input
-                  type="text"
-                  placeholder="Ej: Axel"
-                  value={authNombre}
-                  onChange={(e) => setAuthNombre(e.target.value)}
+                  type="email"
+                  placeholder="tu@email.com"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
                   className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm"
                   required
                 />
               </div>
-            )}
 
-            <div>
-              <label className="block text-xs text-zinc-400 mb-1">Correo electrónico</label>
-              <input
-                type="email"
-                placeholder="tu@email.com"
-                value={authEmail}
-                onChange={(e) => setAuthEmail(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm"
-                required
-              />
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between text-xs mb-1">
-                <label className="text-zinc-400">Contraseña</label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRecuEmail(authEmail);
-                    setRecuError('');
-                    setRecuMensaje('');
-                    setVistaRecuperar('olvide');
-                  }}
-                  className="text-blue-400 hover:underline cursor-pointer"
-                >
-                  ¿Olvidaste tu contraseña?
-                </button>
+              <div>
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <label className="text-zinc-400">Contraseña</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRecuEmail(authEmail);
+                      setRecuError('');
+                      setRecuMensaje('');
+                      setVistaRecuperar('olvide');
+                    }}
+                    className="text-blue-400 hover:underline cursor-pointer"
+                  >
+                    ¿Olvidaste tu contraseña?
+                  </button>
+                </div>
+                <div className="relative">
+                  <input
+                    type={verPassword ? 'text' : 'password'}
+                    placeholder="••••••••"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg pl-3 pr-11 py-2.5 text-sm"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setVerPassword(!verPassword)}
+                    aria-label={verPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                    title={verPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                    className="absolute inset-y-0 right-0 px-3 text-zinc-400 hover:text-zinc-200 cursor-pointer"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="h-5 w-5"
+                    >
+                      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+                      <circle cx="12" cy="12" r="3" />
+                      {verPassword && <path d="M3 3l18 18" />}
+                    </svg>
+                  </button>
+                </div>
               </div>
-              <input
-                type="password"
-                placeholder="••••••••"
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm"
-                required
-              />
-            </div>
 
-            {autenticando && (
-              <p className="text-xs text-zinc-400 text-center">
-                Conectando… si el servidor estaba dormido, puede tardar hasta un minuto.
-              </p>
-            )}
+              {autenticando && (
+                <p className="text-xs text-zinc-400 text-center">
+                  Conectando… si el servidor estaba dormido, puede tardar hasta un minuto.
+                </p>
+              )}
 
-            <button
-              type="submit"
-              disabled={autenticando}
-              className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-wait text-white font-semibold text-sm py-2.5 rounded-lg transition cursor-pointer"
-            >
-              {autenticando
-                ? 'Conectando...'
-                : modoAuth === 'login'
-                ? 'Entrar con mi cuenta'
-                : 'Registrarme'}
-            </button>
-          </form>
+              <button
+                type="submit"
+                disabled={autenticando}
+                className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-wait text-white font-semibold text-sm py-2.5 rounded-lg transition cursor-pointer"
+              >
+                {autenticando
+                  ? 'Conectando...'
+                  : modoAuth === 'login'
+                  ? 'Entrar con mi cuenta'
+                  : 'Registrarme'}
+              </button>
+            </form>
 
-          {/* Botones sociales de Google y Apple */}
-          <div className="space-y-3 mt-4">
-            <div className="relative flex py-2 items-center">
+            <div className="relative flex py-1 items-center">
               <div className="flex-grow border-t border-zinc-800"></div>
-              <span className="flex-shrink mx-3 text-xs text-zinc-500">o continuar con</span>
+              <span className="flex-shrink mx-3 text-xs text-zinc-500">o</span>
               <div className="flex-grow border-t border-zinc-800"></div>
             </div>
 
             <button
               type="button"
-              onClick={() => alert('Integrando Google OAuth...')}
-              className="w-full bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 text-sm font-medium py-2.5 rounded-lg flex items-center justify-center gap-2 transition cursor-pointer"
+              onClick={entrarComoInvitado}
+              className="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-sm py-2.5 rounded-lg border border-zinc-700 transition cursor-pointer"
             >
-              <span>🌐</span> Continuar con Google
-            </button>
-
-            <button
-              type="button"
-              onClick={() => alert('Integrando Apple Sign In...')}
-              className="w-full bg-black hover:bg-zinc-900 border border-zinc-700 text-white text-sm font-medium py-2.5 rounded-lg flex items-center justify-center gap-2 transition cursor-pointer"
-            >
-              <span></span> Continuar con Apple
+              Entrar sin cuenta (Modo Invitado)
             </button>
           </div>
 
-          <div className="relative flex py-1 items-center">
-            <div className="flex-grow border-t border-zinc-800"></div>
-            <span className="flex-shrink mx-3 text-xs text-zinc-500">o</span>
-            <div className="flex-grow border-t border-zinc-800"></div>
+          {/* Características */}
+          <div className="grid grid-cols-3 gap-3 text-center lg:col-start-1 lg:row-start-2 lg:self-start">
+            <div className="flex flex-col items-center gap-1.5">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="h-7 w-7 text-blue-400"
+              >
+                <rect width="18" height="18" x="3" y="4" rx="2" />
+                <path d="M16 2v4M8 2v4M3 10h18" />
+                <path d="m9 16 2 2 4-4" />
+              </svg>
+              <p className="text-sm font-bold text-zinc-100">Organizá</p>
+              <p className="text-xs text-zinc-400">Tus horarios y parciales</p>
+            </div>
+            <div className="flex flex-col items-center gap-1.5">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="h-7 w-7 text-purple-400"
+              >
+                <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
+                <polyline points="16 7 22 7 22 13" />
+              </svg>
+              <p className="text-sm font-bold text-zinc-100">Controlá</p>
+              <p className="text-xs text-zinc-400">Tu progreso académico</p>
+            </div>
+            <div className="flex flex-col items-center gap-1.5">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="h-7 w-7 text-emerald-400"
+              >
+                <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
+                <path d="M6 12v5c3 3 9 3 12 0v-5" />
+              </svg>
+              <p className="text-sm font-bold text-zinc-100">Alcanzá</p>
+              <p className="text-xs text-zinc-400">Tus objetivos</p>
+            </div>
           </div>
-
-          <button
-            type="button"
-            onClick={entrarComoInvitado}
-            className="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium text-sm py-2.5 rounded-lg border border-zinc-700 transition cursor-pointer"
-          >
-            Entrar sin cuenta (Modo Invitado)
-          </button>
         </div>
       </main>
     );
@@ -1682,6 +1979,12 @@ export default function Home() {
         {iniciales(usuario?.nombre || '')}
       </span>
     );
+
+  const reglasDe = (m: Materia) => ({
+    promo: aNumero(m.nota_promocion) ?? cfg.notaPromocion,
+    regular: aNumero(m.nota_regularidad) ?? cfg.notaRegularidad,
+    asistencia: m.asistencia_minima ?? cfg.asistenciaMinima,
+  });
 
   const materiasFiltradas = materias.filter((m) => {
     const coincideTexto = m.nombre.toLowerCase().includes(busqueda.toLowerCase());
@@ -1718,6 +2021,24 @@ export default function Home() {
   const examenesAgenda = examenes.filter((ex) => ex.fecha.startsWith(fechaFiltroAgenda));
   const tpsAgenda = tps.filter((tp) => tp.fecha_entrega.startsWith(fechaFiltroAgenda));
 
+  const compararMaterias = (a: Materia, b: Materia) => {
+    if (cfg.ordenMaterias === 'estado') {
+      const d = ORDEN_ESTADO.indexOf(a.estado) - ORDEN_ESTADO.indexOf(b.estado);
+      if (d !== 0) return d;
+    } else if (cfg.ordenMaterias === 'cuatrimestre') {
+      const d = (ORDEN_CUATRI[String(a.cuatrimestre)] ?? 9) - (ORDEN_CUATRI[String(b.cuatrimestre)] ?? 9);
+      if (d !== 0) return d;
+    }
+    return a.nombre.localeCompare(b.nombre);
+  };
+
+  const gruposPorAnio = Array.from(new Set<number>(materiasFiltradas.map((m: Materia) => m.anio_carrera ?? 1)))
+    .sort((a, b) => a - b)
+    .map((anio) => ({
+      anio,
+      materias: materiasFiltradas.filter((m) => (m.anio_carrera ?? 1) === anio).sort(compararMaterias),
+    }));
+
   const cumpleRequisito = (c: Correlativa) => {
     const matReq = materias.find((m) => m.id === c.correlativa_id);
     const est = matReq ? matReq.estado : c.correlativa_estado;
@@ -1740,8 +2061,8 @@ export default function Home() {
     (a, b) => a.nombre.localeCompare(b.nombre)
   );
 
-  const proximosVencimientos = [
-    ...examenes
+  const proximosVencimientos = !cfg.avisosActivos ? [] : [
+    ...(!cfg.avisarExamenes ? [] : examenes)
       .map((ex) => ({
         clave: `ex-${ex.id}`,
         tipo: 'Examen',
@@ -1749,8 +2070,8 @@ export default function Home() {
         materia: ex.materia_nombre,
         dias: calcularDiasRestantes(ex.fecha),
       }))
-      .filter((x) => x.dias >= 0 && x.dias <= 7),
-    ...tps
+      .filter((x) => x.dias >= 0 && x.dias <= cfg.antelacionDias),
+    ...(!cfg.avisarTps ? [] : tps)
       .filter((tp) => tp.estado === 'pendiente' || tp.estado === 'rehacer')
       .map((tp) => ({
         clave: `tp-${tp.id}`,
@@ -1759,8 +2080,637 @@ export default function Home() {
         materia: tp.materia_nombre,
         dias: calcularDiasRestantes(tp.fecha_entrega),
       }))
-      .filter((x) => x.dias <= 7),
+      .filter((x) => x.dias <= cfg.antelacionDias),
   ].sort((a, b) => a.dias - b.dias);
+
+  // ---------- Ayudas visuales para la pantalla de configuración ----------
+  const renderSeccionConfig = (
+    id: string,
+    icono: string,
+    titulo: string,
+    descripcion: string,
+    contenido: React.ReactNode
+  ) => (
+    <div key={id} className="border-b border-zinc-800 last:border-b-0">
+      <button
+        type="button"
+        onClick={() => setSeccionConfig(seccionConfig === id ? null : id)}
+        aria-expanded={seccionConfig === id}
+        className="w-full text-left px-4 py-3.5 flex items-start gap-3 hover:bg-zinc-800/40 transition cursor-pointer"
+      >
+        <span className="text-lg leading-none mt-0.5">{icono}</span>
+        <span className="flex-1">
+          <span className="block text-sm font-bold text-zinc-100">{titulo}</span>
+          <span className="block text-xs text-zinc-400 mt-0.5">{descripcion}</span>
+        </span>
+        <span className="text-zinc-500 text-xs mt-1">{seccionConfig === id ? '▲' : '▼'}</span>
+      </button>
+      {seccionConfig === id && <div className="px-4 pb-4 pt-1 space-y-4">{contenido}</div>}
+    </div>
+  );
+
+  const renderInterruptor = (activo: boolean, alCambiar: (v: boolean) => void, etiqueta: string) => (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-sm text-zinc-200">{etiqueta}</span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={activo}
+        aria-label={etiqueta}
+        onClick={() => alCambiar(!activo)}
+        className={`relative h-6 w-11 shrink-0 rounded-full transition cursor-pointer ${
+          activo ? 'bg-blue-600' : 'bg-zinc-700'
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+            activo ? 'left-[22px]' : 'left-0.5'
+          }`}
+        />
+      </button>
+    </div>
+  );
+
+  const renderOpciones = (
+    valor: string,
+    opciones: { valor: string; etiqueta: string }[],
+    alCambiar: (v: string) => void
+  ) => (
+    <div className="flex flex-wrap gap-2">
+      {opciones.map((o) => (
+        <button
+          key={o.valor}
+          type="button"
+          onClick={() => alCambiar(o.valor)}
+          className={`text-xs font-medium px-3 py-1.5 rounded-lg border transition cursor-pointer ${
+            valor === o.valor
+              ? 'bg-blue-600 border-blue-500 text-white'
+              : 'bg-zinc-950 border-zinc-700 text-zinc-300 hover:bg-zinc-800'
+          }`}
+        >
+          {o.etiqueta}
+        </button>
+      ))}
+    </div>
+  );
+
+  const renderNumeroConfig = (
+    etiqueta: string,
+    valor: number,
+    min: number,
+    max: number,
+    paso: number,
+    alGuardar: (n: number) => void
+  ) => (
+    <div>
+      <label className="block text-xs text-zinc-400 mb-1">{etiqueta}</label>
+      <input
+        key={`${etiqueta}-${valor}`}
+        type="number"
+        min={min}
+        max={max}
+        step={paso}
+        defaultValue={valor}
+        onBlur={(e) => {
+          const n = Number(e.target.value);
+          if (!Number.isNaN(n) && e.target.value !== '') alGuardar(Math.min(max, Math.max(min, n)));
+        }}
+        className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+      />
+    </div>
+  );
+
+  // ---------- Pantalla: Configuración ----------
+  if (vistaApp === 'config') {
+    return (
+      <main className="min-h-screen bg-zinc-950 text-zinc-100 p-4 sm:p-6">
+        <div className="max-w-2xl mx-auto space-y-5">
+          <button
+            type="button"
+            onClick={() => setVistaApp('principal')}
+            className="text-sm text-blue-400 hover:underline cursor-pointer"
+          >
+            ← Volver
+          </button>
+
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h1 className="text-2xl font-bold flex items-center gap-2">
+                <span>⚙</span> Configuración
+              </h1>
+              <p className="text-sm text-zinc-400 mt-1">Personalizá tu {APP_NOMBRE}</p>
+            </div>
+            <span
+              className={`text-xs px-2.5 py-1 rounded-full border ${
+                modoSesion === 'guest'
+                  ? 'bg-amber-950/70 text-amber-300 border-amber-800/60'
+                  : 'bg-emerald-950/70 text-emerald-300 border-emerald-800/60'
+              }`}
+            >
+              {modoSesion === 'guest' ? 'Invitado' : 'Mi cuenta'}
+            </span>
+          </div>
+
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
+            {renderSeccionConfig(
+              'perfil',
+              '🎓',
+              'Perfil académico',
+              'Datos personales, universidad y carrera',
+              <button
+                type="button"
+                onClick={abrirDatosAcademicos}
+                className="bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold px-4 py-2 rounded-lg transition cursor-pointer"
+              >
+                Abrir datos académicos →
+              </button>
+            )}
+
+            {renderSeccionConfig(
+              'apariencia',
+              '🎨',
+              'Apariencia',
+              'Tema, tamaño de letra y colores de materias',
+              <>
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wide">Tema</p>
+                  {renderOpciones(
+                    cfg.tema,
+                    [
+                      { valor: 'claro', etiqueta: '☀ Claro' },
+                      { valor: 'oscuro', etiqueta: '🌙 Oscuro' },
+                      { valor: 'auto', etiqueta: '🖥 Automático' },
+                    ],
+                    (v) => actualizarConfig({ tema: v as Config['tema'] })
+                  )}
+                  <p className="text-xs text-zinc-500">
+                    Automático sigue el modo claro u oscuro de tu dispositivo.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wide">
+                    Tamaño de letra
+                  </p>
+                  {renderOpciones(
+                    cfg.fuente,
+                    [
+                      { valor: 'chica', etiqueta: 'Chica' },
+                      { valor: 'normal', etiqueta: 'Normal' },
+                      { valor: 'grande', etiqueta: 'Grande' },
+                    ],
+                    (v) => actualizarConfig({ fuente: v as Config['fuente'] })
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wide">
+                    Colores de las materias
+                  </p>
+                  {materias.length === 0 ? (
+                    <p className="text-xs text-zinc-500">Cargá materias para poder elegirles un color.</p>
+                  ) : (
+                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                      {[...materias].sort(compararMaterias).map((m) => (
+                        <div
+                          key={m.id}
+                          className="flex flex-wrap items-center justify-between gap-2 bg-zinc-950/60 border border-zinc-800 rounded-lg px-3 py-2"
+                        >
+                          <span className="text-sm text-zinc-200 truncate">{m.nombre}</span>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => actualizarMateria({ ...m, color: null })}
+                              title="Sin color"
+                              className={`h-5 w-5 rounded-full border-2 text-[9px] text-zinc-400 cursor-pointer ${
+                                !m.color ? 'border-zinc-100' : 'border-zinc-700'
+                              }`}
+                            >
+                              ✕
+                            </button>
+                            {PALETA_MATERIAS.map((c) => (
+                              <button
+                                key={c}
+                                type="button"
+                                onClick={() => actualizarMateria({ ...m, color: c })}
+                                style={{ backgroundColor: c }}
+                                className={`h-5 w-5 rounded-full border-2 cursor-pointer ${
+                                  m.color === c ? 'border-zinc-100' : 'border-transparent'
+                                }`}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {renderSeccionConfig(
+              'reglas',
+              '📐',
+              'Reglas académicas',
+              'Promoción, regularidad y calificaciones',
+              <>
+                <p className="text-xs text-zinc-400">
+                  Son los valores por defecto para todas tus materias. Si una materia tiene reglas
+                  distintas, editala (✎) y cargá sus propios valores.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {renderNumeroConfig('Promociona con (nota)', cfg.notaPromocion, 1, 10, 0.5, (n) =>
+                    actualizarConfig({ notaPromocion: n })
+                  )}
+                  {renderNumeroConfig('Regulariza con (nota)', cfg.notaRegularidad, 1, 10, 0.5, (n) =>
+                    actualizarConfig({ notaRegularidad: n })
+                  )}
+                  {renderNumeroConfig('Asistencia mínima (%)', cfg.asistenciaMinima, 0, 100, 5, (n) =>
+                    actualizarConfig({ asistenciaMinima: n })
+                  )}
+                </div>
+              </>
+            )}
+
+            {renderSeccionConfig(
+              'avisos',
+              '🔔',
+              'Notificaciones',
+              'Recordatorios y alertas',
+              <>
+                {renderInterruptor(
+                  cfg.avisosActivos,
+                  (v) => actualizarConfig({ avisosActivos: v }),
+                  'Mostrar avisos de próximos vencimientos'
+                )}
+                {cfg.avisosActivos && (
+                  <>
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wide">
+                        Avisarme con
+                      </p>
+                      {renderOpciones(
+                        String(cfg.antelacionDias),
+                        [
+                          { valor: '1', etiqueta: '1 día' },
+                          { valor: '2', etiqueta: '2 días' },
+                          { valor: '3', etiqueta: '3 días' },
+                          { valor: '7', etiqueta: '1 semana' },
+                          { valor: '14', etiqueta: '2 semanas' },
+                        ],
+                        (v) => actualizarConfig({ antelacionDias: Number(v) })
+                      )}
+                      <p className="text-xs text-zinc-500">de antelación a la fecha del parcial o la entrega.</p>
+                    </div>
+                    {renderInterruptor(
+                      cfg.avisarExamenes,
+                      (v) => actualizarConfig({ avisarExamenes: v }),
+                      'Parciales y finales'
+                    )}
+                    {renderInterruptor(
+                      cfg.avisarTps,
+                      (v) => actualizarConfig({ avisarTps: v }),
+                      'Entrega de TPs'
+                    )}
+                  </>
+                )}
+                <p className="text-xs text-zinc-500">
+                  Los avisos aparecen arriba de todo cuando abrís la app.
+                </p>
+              </>
+            )}
+
+            {renderSeccionConfig(
+              'datos',
+              '🗄',
+              'Datos y almacenamiento',
+              'Copias de seguridad y reinicio',
+              <>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={exportarReportePDF}
+                    disabled={materias.length === 0}
+                    className="text-xs bg-zinc-950 hover:bg-zinc-800 disabled:opacity-40 text-zinc-200 border border-zinc-700 px-3 py-2 rounded-lg cursor-pointer"
+                  >
+                    📄 Exportar PDF / Imprimir
+                  </button>
+                  <button
+                    type="button"
+                    onClick={exportarCSV}
+                    disabled={materias.length === 0}
+                    className="text-xs bg-zinc-950 hover:bg-zinc-800 disabled:opacity-40 text-zinc-200 border border-zinc-700 px-3 py-2 rounded-lg cursor-pointer"
+                  >
+                    📊 Exportar Excel (CSV)
+                  </button>
+                </div>
+
+                <div className="border-t border-zinc-800 pt-3 space-y-2">
+                  {!confirmarReinicioCfg ? (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmarReinicioCfg(true)}
+                      className="text-xs bg-zinc-950 hover:bg-red-950/50 text-red-400 border border-red-900/60 px-3 py-2 rounded-lg cursor-pointer"
+                    >
+                      ↺ Reiniciar toda la configuración
+                    </button>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-sm text-zinc-300">
+                        ¿Volver a los valores por defecto? Tus materias y datos no se tocan.
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={reiniciarConfig}
+                          className="bg-red-600 hover:bg-red-500 text-white text-xs font-semibold px-3 py-2 rounded-lg cursor-pointer"
+                        >
+                          Sí, reiniciar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmarReinicioCfg(false)}
+                          className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs px-3 py-2 rounded-lg cursor-pointer"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  <p className="text-xs text-zinc-500">
+                    Para borrar todas tus materias, usá el botón rojo de la pestaña Materias.
+                  </p>
+                </div>
+              </>
+            )}
+
+            {renderSeccionConfig(
+              'general',
+              '🎛',
+              'Preferencias generales',
+              'Estadísticas y orden de las materias',
+              <>
+                {renderInterruptor(
+                  cfg.mostrarEstadisticas,
+                  (v) => actualizarConfig({ mostrarEstadisticas: v }),
+                  'Mostrar estadísticas (aprobadas, avance y promedio)'
+                )}
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wide">
+                    Orden de las materias dentro de cada año
+                  </p>
+                  {renderOpciones(
+                    cfg.ordenMaterias,
+                    [
+                      { valor: 'nombre', etiqueta: 'Alfabético' },
+                      { valor: 'estado', etiqueta: 'Por estado' },
+                      { valor: 'cuatrimestre', etiqueta: 'Por cuatrimestre' },
+                    ],
+                    (v) => actualizarConfig({ ordenMaterias: v as Config['ordenMaterias'] })
+                  )}
+                </div>
+              </>
+            )}
+
+            {renderSeccionConfig(
+              'seguridad',
+              '🔒',
+              'Seguridad',
+              'Cambiar tu contraseña',
+              modoSesion === 'guest' ? (
+                <p className="text-xs text-zinc-400">
+                  El modo invitado no tiene contraseña. Creá una cuenta para proteger tus datos.
+                </p>
+              ) : (
+                <form onSubmit={cambiarPassword} className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                  <div>
+                    <label className="block text-xs text-zinc-400 mb-1">Contraseña actual</label>
+                    <input
+                      type="password"
+                      value={passActual}
+                      onChange={(e) => setPassActual(e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-zinc-400 mb-1">Contraseña nueva</label>
+                    <input
+                      type="password"
+                      placeholder="Mínimo 6 caracteres"
+                      value={passNueva}
+                      onChange={(e) => setPassNueva(e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-zinc-400 mb-1">Repetí la nueva</label>
+                    <input
+                      type="password"
+                      value={passNueva2}
+                      onChange={(e) => setPassNueva2(e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                      required
+                    />
+                  </div>
+                  <div className="sm:col-span-3 flex flex-wrap items-center gap-3">
+                    <button
+                      type="submit"
+                      disabled={passGuardando}
+                      className="bg-zinc-800 hover:bg-zinc-700 disabled:opacity-60 text-zinc-100 text-sm font-medium px-4 py-2 rounded-lg border border-zinc-700 transition cursor-pointer"
+                    >
+                      {passGuardando ? 'Guardando...' : 'Actualizar contraseña'}
+                    </button>
+                    {passError && <span className="text-xs text-red-400">{passError}</span>}
+                    {passMsg && <span className="text-xs text-emerald-400">{passMsg}</span>}
+                  </div>
+                </form>
+              )
+            )}
+
+            {renderSeccionConfig(
+              'comentarios',
+              '💬',
+              'Comentarios para los desarrolladores',
+              'Sugerencias, errores o ideas',
+              modoSesion === 'guest' ? (
+                <p className="text-xs text-zinc-400">
+                  Para enviar comentarios necesitás una cuenta. Creala desde &quot;Guardar datos en una
+                  cuenta&quot;.
+                </p>
+              ) : (
+                <form onSubmit={enviarComentario} className="space-y-3">
+                  <p className="text-xs text-zinc-400">
+                    Contale al equipo de {APP_NOMBRE} qué mejorarías, qué falla o qué te gustaría que
+                    agreguemos.
+                  </p>
+                  {renderOpciones(
+                    comTipo,
+                    [
+                      { valor: 'sugerencia', etiqueta: '💡 Sugerencia' },
+                      { valor: 'error', etiqueta: '🐞 Error' },
+                      { valor: 'otro', etiqueta: '💬 Otro' },
+                    ],
+                    setComTipo
+                  )}
+                  <textarea
+                    value={comMensaje}
+                    onChange={(e) => setComMensaje(e.target.value)}
+                    rows={4}
+                    maxLength={2000}
+                    placeholder="Escribí tu comentario..."
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  />
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="submit"
+                      disabled={comEnviando}
+                      className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition cursor-pointer"
+                    >
+                      {comEnviando ? 'Enviando...' : 'Enviar comentario'}
+                    </button>
+                    {comError && <span className="text-xs text-red-400">{comError}</span>}
+                    {comMsg && <span className="text-xs text-emerald-400">{comMsg}</span>}
+                  </div>
+                </form>
+              )
+            )}
+          </div>
+
+          <p className="text-center text-xs text-zinc-500">
+            {APP_NOMBRE} · {APP_SUBTITULO} · Versión {APP_VERSION}
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  // ---------- Pantalla: Datos académicos ----------
+  if (vistaApp === 'academicos') {
+    return (
+      <main className="min-h-screen bg-zinc-950 text-zinc-100 p-4 sm:p-6">
+        <div className="max-w-2xl mx-auto space-y-5">
+          <button
+            type="button"
+            onClick={() => setVistaApp('principal')}
+            className="text-sm text-blue-400 hover:underline cursor-pointer"
+          >
+            ← Volver
+          </button>
+
+          <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2">
+              <span>🎓</span> Datos académicos
+            </h1>
+            <p className="text-sm text-zinc-400 mt-1">
+              Tu información personal y la de la carrera que estudiás
+            </p>
+          </div>
+
+          <form
+            onSubmit={guardarDatosAcademicos}
+            className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 sm:p-6 grid grid-cols-1 sm:grid-cols-2 gap-4"
+          >
+            <div>
+              <label className="block text-xs text-zinc-400 mb-1">Nombre/s</label>
+              <input
+                type="text"
+                value={datosAcad.nombre}
+                onChange={(e) => setDatosAcad({ ...datosAcad, nombre: e.target.value })}
+                maxLength={80}
+                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-zinc-400 mb-1">Apellido/s</label>
+              <input
+                type="text"
+                value={datosAcad.apellido}
+                onChange={(e) => setDatosAcad({ ...datosAcad, apellido: e.target.value })}
+                maxLength={80}
+                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs text-zinc-400 mb-1">Universidad / institución</label>
+              <input
+                type="text"
+                placeholder="Ej: UADER - Facultad de Ciencia y Tecnología"
+                value={datosAcad.universidad}
+                onChange={(e) => setDatosAcad({ ...datosAcad, universidad: e.target.value })}
+                maxLength={120}
+                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs text-zinc-400 mb-1">Carrera</label>
+              <input
+                type="text"
+                placeholder="Ej: Lic. en Sistemas de Información"
+                value={datosAcad.carrera}
+                onChange={(e) => setDatosAcad({ ...datosAcad, carrera: e.target.value })}
+                maxLength={120}
+                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-zinc-400 mb-1">Año de ingreso</label>
+              <input
+                type="number"
+                placeholder="Ej: 2024"
+                min="1950"
+                max={new Date().getFullYear() + 1}
+                value={datosAcad.anio_ingreso}
+                onChange={(e) => setDatosAcad({ ...datosAcad, anio_ingreso: e.target.value })}
+                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-zinc-400 mb-1">Cuatrimestre actual</label>
+              <select
+                value={datosAcad.cuatrimestre_actual}
+                onChange={(e) => setDatosAcad({ ...datosAcad, cuatrimestre_actual: e.target.value })}
+                className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+              >
+                <option value="">Sin definir</option>
+                <option value="1° cuatrimestre">1° cuatrimestre</option>
+                <option value="2° cuatrimestre">2° cuatrimestre</option>
+                <option value="Anual">Anual</option>
+              </select>
+            </div>
+
+            <div className="sm:col-span-2 space-y-3">
+              {perfilError && (
+                <div className="bg-red-950/60 border border-red-800 text-red-300 text-xs px-3 py-2.5 rounded-lg">
+                  {perfilError}
+                </div>
+              )}
+              {perfilMsg && (
+                <div className="bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-xs px-3 py-2.5 rounded-lg">
+                  {perfilMsg}
+                </div>
+              )}
+              <button
+                type="submit"
+                disabled={perfilGuardando}
+                className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white font-semibold text-sm px-5 py-2.5 rounded-lg transition cursor-pointer"
+              >
+                {perfilGuardando ? 'Guardando...' : 'Guardar datos'}
+              </button>
+            </div>
+          </form>
+
+          {modoSesion === 'guest' && (
+            <p className="text-xs text-amber-300/90">
+              Estás en modo invitado: estos datos solo se guardan en este navegador.
+            </p>
+          )}
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100 p-4 sm:p-6 md:p-10">
@@ -1813,8 +2763,8 @@ export default function Home() {
         </div>
 
         {panelUsuarioAbierto && (
-          <section className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-4 sm:p-6 space-y-6">
-            <div className="flex flex-col sm:flex-row gap-6 sm:items-start">
+          <section className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-4 sm:p-6 space-y-5">
+            <div className="flex flex-col sm:flex-row gap-5 sm:items-center">
               <div className="flex flex-col items-center gap-2.5 sm:w-40">
                 {renderAvatar('h-24 w-24', 'text-3xl')}
                 <div className="flex items-center gap-3">
@@ -1834,48 +2784,18 @@ export default function Home() {
                 </div>
               </div>
 
-              <form onSubmit={guardarDatosPerfil} className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1">Nombre</label>
-                  <input
-                    type="text"
-                    value={perfilNombre}
-                    onChange={(e) => setPerfilNombre(e.target.value)}
-                    maxLength={80}
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1">Correo electrónico</label>
-                  <input
-                    type="text"
-                    value={modoSesion === 'guest' ? 'Sin cuenta (modo invitado)' : usuario.email}
-                    disabled
-                    className="w-full bg-zinc-950/50 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-500"
-                  />
-                </div>
-                <div className="sm:col-span-2">
-                  <label className="block text-xs text-zinc-400 mb-1">Carrera que estudiás</label>
-                  <input
-                    type="text"
-                    placeholder="Ej: Lic. en Sistemas de Información"
-                    value={perfilCarrera}
-                    onChange={(e) => setPerfilCarrera(e.target.value)}
-                    maxLength={120}
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                  />
-                </div>
-                <div className="sm:col-span-2">
-                  <button
-                    type="submit"
-                    disabled={perfilGuardando}
-                    className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white font-semibold text-sm px-4 py-2 rounded-lg transition cursor-pointer"
-                  >
-                    {perfilGuardando ? 'Guardando...' : 'Guardar cambios'}
-                  </button>
-                </div>
-              </form>
+              <div className="flex-1 space-y-1 text-center sm:text-left">
+                <p className="text-xl font-bold text-zinc-100">
+                  {usuario.nombre} {usuario.apellido || ''}
+                </p>
+                <p className="text-sm text-zinc-400">
+                  {modoSesion === 'guest' ? 'Sin cuenta (modo invitado)' : usuario.email}
+                </p>
+                <p className="text-sm text-zinc-300">
+                  🎓 {usuario.carrera || 'Carrera sin definir'}
+                  {usuario.universidad ? ` · ${usuario.universidad}` : ''}
+                </p>
+              </div>
             </div>
 
             {perfilError && (
@@ -1915,75 +2835,25 @@ export default function Home() {
               </div>
             </div>
 
-            {modoSesion === 'auth' && (
-              <div className="border-t border-zinc-800 pt-4 space-y-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPassError('');
-                    setPassMsg('');
-                    setMostrarCambioPass(!mostrarCambioPass);
-                  }}
-                  className="text-xs text-blue-400 hover:underline cursor-pointer"
-                >
-                  {mostrarCambioPass ? '▲ Ocultar' : '🔒 Cambiar contraseña'}
-                </button>
-
-                {mostrarCambioPass && (
-                  <form onSubmit={cambiarPassword} className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-                    <div>
-                      <label className="block text-xs text-zinc-400 mb-1">Contraseña actual</label>
-                      <input
-                        type="password"
-                        value={passActual}
-                        onChange={(e) => setPassActual(e.target.value)}
-                        className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-zinc-400 mb-1">Contraseña nueva</label>
-                      <input
-                        type="password"
-                        placeholder="Mínimo 6 caracteres"
-                        value={passNueva}
-                        onChange={(e) => setPassNueva(e.target.value)}
-                        className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-zinc-400 mb-1">Repetí la nueva</label>
-                      <input
-                        type="password"
-                        value={passNueva2}
-                        onChange={(e) => setPassNueva2(e.target.value)}
-                        className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                        required
-                      />
-                    </div>
-                    <div className="sm:col-span-3 flex flex-wrap items-center gap-3">
-                      <button
-                        type="submit"
-                        disabled={passGuardando}
-                        className="bg-zinc-800 hover:bg-zinc-700 disabled:opacity-60 text-zinc-100 text-sm font-medium px-4 py-2 rounded-lg border border-zinc-700 transition cursor-pointer"
-                      >
-                        {passGuardando ? 'Guardando...' : 'Actualizar contraseña'}
-                      </button>
-                      {passError && <span className="text-xs text-red-400">{passError}</span>}
-                      {passMsg && <span className="text-xs text-emerald-400">{passMsg}</span>}
-                    </div>
-                  </form>
-                )}
-              </div>
-            )}
-
-            {modoSesion === 'guest' && (
-              <p className="text-xs text-amber-300/90 border-t border-zinc-800 pt-4">
-                Estás en modo invitado: tus datos solo viven en este navegador. Para tener correo y
-                contraseña, usá &quot;Guardar datos en una cuenta&quot;.
-              </p>
-            )}
+            <div className="flex flex-wrap gap-2 border-t border-zinc-800 pt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setSeccionConfig(null);
+                  setVistaApp('config');
+                }}
+                className="bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold px-4 py-2 rounded-lg transition cursor-pointer"
+              >
+                ⚙ Configuración
+              </button>
+              <button
+                type="button"
+                onClick={abrirDatosAcademicos}
+                className="bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-sm font-semibold px-4 py-2 rounded-lg border border-zinc-700 transition cursor-pointer"
+              >
+                🎓 Datos académicos
+              </button>
+            </div>
           </section>
         )}
 
@@ -1994,11 +2864,11 @@ export default function Home() {
               className="w-full max-w-lg bg-zinc-900 border border-zinc-700 rounded-2xl p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto"
             >
               <div className="flex items-start justify-between gap-2">
-                <h2 className="text-lg font-bold text-white">Editar materia</h2>
+                <h2 className="text-lg font-bold text-zinc-100">Editar materia</h2>
                 <button
                   type="button"
                   onClick={() => setMateriaEditando(null)}
-                  className="text-zinc-400 hover:text-white cursor-pointer"
+                  className="text-zinc-400 hover:text-zinc-100 cursor-pointer"
                 >
                   ✕
                 </button>
@@ -2092,6 +2962,62 @@ export default function Home() {
                   </div>
                 </div>
               )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Promociona con (nota)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="1"
+                    max="10"
+                    placeholder={`Por defecto: ${cfg.notaPromocion}`}
+                    value={formEdit.nota_promocion}
+                    onChange={(e) => setCampoEdit('nota_promocion', e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Regulariza con (nota)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="1"
+                    max="10"
+                    placeholder={`Por defecto: ${cfg.notaRegularidad}`}
+                    value={formEdit.nota_regularidad}
+                    onChange={(e) => setCampoEdit('nota_regularidad', e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">Color de la materia</label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCampoEdit('color', '')}
+                    title="Sin color"
+                    className={`h-6 w-6 rounded-full border-2 text-[10px] text-zinc-400 cursor-pointer ${
+                      formEdit.color === '' ? 'border-zinc-100' : 'border-zinc-700'
+                    }`}
+                  >
+                    ✕
+                  </button>
+                  {PALETA_MATERIAS.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setCampoEdit('color', c)}
+                      style={{ backgroundColor: c }}
+                      className={`h-6 w-6 rounded-full border-2 cursor-pointer ${
+                        formEdit.color === c ? 'border-zinc-100' : 'border-transparent'
+                      }`}
+                    />
+                  ))}
+                </div>
+              </div>
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
@@ -2233,14 +3159,14 @@ export default function Home() {
             <div className="w-full max-w-md bg-zinc-900 border border-zinc-700 rounded-2xl p-6 space-y-5 shadow-2xl">
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <h2 className="text-lg font-bold text-white">Pasar tus datos a una cuenta</h2>
+                  <h2 className="text-lg font-bold text-zinc-100">Pasar tus datos a una cuenta</h2>
                   <p className="text-xs text-zinc-400 mt-0.5">
                     Se migrarán tus {materias.length} materias, horarios, exámenes y TPs a la nube.
                   </p>
                 </div>
                 <button
                   onClick={() => setMostrarModalMigracion(false)}
-                  className="text-zinc-400 hover:text-white cursor-pointer"
+                  className="text-zinc-400 hover:text-zinc-100 cursor-pointer"
                 >
                   ✕
                 </button>
@@ -2337,9 +3263,9 @@ export default function Home() {
             ) : (
               <div className="flex items-center justify-center md:justify-start gap-2 sm:gap-3 mt-2 font-mono">
                 {[
-                  { val: calcularCuentaRegresivaCursada()?.dias ?? 0, label: 'Días', color: 'text-white' },
-                  { val: calcularCuentaRegresivaCursada()?.horas ?? 0, label: 'Horas', color: 'text-white' },
-                  { val: calcularCuentaRegresivaCursada()?.minutos ?? 0, label: 'Min', color: 'text-white' },
+                  { val: calcularCuentaRegresivaCursada()?.dias ?? 0, label: 'Días', color: 'text-zinc-100' },
+                  { val: calcularCuentaRegresivaCursada()?.horas ?? 0, label: 'Horas', color: 'text-zinc-100' },
+                  { val: calcularCuentaRegresivaCursada()?.minutos ?? 0, label: 'Min', color: 'text-zinc-100' },
                   { val: calcularCuentaRegresivaCursada()?.segundos ?? 0, label: 'Seg', color: 'text-blue-400' },
                 ].map((b, i) => (
                   <div key={b.label} className="flex items-center gap-2 sm:gap-3">
@@ -2392,7 +3318,7 @@ export default function Home() {
         {proximosVencimientos.length > 0 && (
           <section className="bg-zinc-900/80 border border-amber-900/50 rounded-2xl p-4 sm:p-5 space-y-3">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-amber-400">
-              ⏰ Próximos 7 días
+              ⏰ Próximos {cfg.antelacionDias} día{cfg.antelacionDias === 1 ? '' : 's'}
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {proximosVencimientos.map((x) => (
@@ -2432,9 +3358,22 @@ export default function Home() {
         <header className="space-y-4 border-b border-zinc-800 pb-6">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div className="space-y-2">
-              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
-                Organizador Académico
-              </h1>
+              <div className="flex items-center gap-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/logo.png"
+                  alt={`Logo de ${APP_NOMBRE}`}
+                  className="h-11 w-11 rounded-xl border border-zinc-700 object-cover"
+                />
+                <div>
+                  <h1 className="text-2xl sm:text-3xl font-bold tracking-tight leading-none">
+                    {APP_NOMBRE}
+                  </h1>
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-400 mt-1">
+                    {APP_SUBTITULO}
+                  </p>
+                </div>
+              </div>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -2455,6 +3394,7 @@ export default function Home() {
               </div>
             </div>
 
+            {cfg.mostrarEstadisticas && (
             <div className="grid grid-cols-3 gap-2 sm:gap-3">
               <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-3 sm:px-4 py-2.5 text-center">
                 <p className="text-[10px] sm:text-xs text-zinc-400 uppercase">Aprobadas</p>
@@ -2472,14 +3412,17 @@ export default function Home() {
                 <p className="text-lg sm:text-2xl font-bold text-blue-400">{promedio}</p>
               </div>
             </div>
+            )}
           </div>
 
+          {cfg.mostrarEstadisticas && (
           <div className="w-full bg-zinc-900 rounded-full h-2.5 overflow-hidden border border-zinc-800">
             <div
               className="bg-gradient-to-r from-blue-500 to-emerald-500 h-full transition-all duration-500"
               style={{ width: `${porcentajeCarrera}%` }}
             />
           </div>
+          )}
         </header>
 
         <nav className="flex overflow-x-auto gap-2 border-b border-zinc-800 pb-3 no-scrollbar">
@@ -2726,18 +3669,33 @@ export default function Home() {
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {materiasFiltradas.map((m) => {
+              <div className="space-y-8">
+                {gruposPorAnio.map((grupo) => (
+                  <div key={grupo.anio} className="space-y-4">
+                    <div className="flex items-center gap-3">
+                      <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-200">
+                        {grupo.anio}° Año
+                      </h3>
+                      <div className="flex-1 border-t border-zinc-800" />
+                      <span className="text-xs text-zinc-500">
+                        {grupo.materias.filter((x) => x.estado === 'aprobada').length}/
+                        {grupo.materias.length} aprobadas
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {grupo.materias.map((m) => {
                   const { habilitada, faltantes } = verificarCorrelativasCumplidas(m.id);
                   const presentes = Math.max(0, m.clases_totales - m.inasistencias);
                   const pctAsistencia =
                     m.clases_totales > 0 ? Math.round((presentes / m.clases_totales) * 100) : 100;
                   const enRiesgoAsistencia =
                   m.clases_totales > 0 && pctAsistencia < (m.asistencia_minima ?? 0);
+                  const reglas = reglasDe(m);
 
                   return (
                     <div
                       key={m.id}
+                      style={m.color ? { boxShadow: `inset 6px 0 0 0 ${m.color}` } : undefined}
                       className={`bg-zinc-900 border-2 rounded-xl p-4 flex flex-col justify-between gap-3 ${bordeTarjetaMateria[m.estado]}`}
                     >
                       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
@@ -2877,6 +3835,11 @@ export default function Home() {
                         </div>
                       </div>
 
+                      <p className="text-[11px] text-zinc-500">
+                        🎯 Promociona con {reglas.promo} · Regulariza con {reglas.regular} · Asistencia mín.{' '}
+                        {reglas.asistencia}%
+                      </p>
+
                       {!habilitada && (
                         <p className="text-xs text-red-400 bg-red-950/40 border border-red-900/50 rounded-lg px-3 py-1.5">
                           Falta:{' '}
@@ -2888,6 +3851,9 @@ export default function Home() {
                     </div>
                   );
                 })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
