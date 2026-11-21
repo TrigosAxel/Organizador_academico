@@ -377,13 +377,26 @@ const migrarInvitado = async (req, res) => {
 
     const mapa = new Map(); // id de invitado -> id nuevo en la BD
 
+    // Carrera donde van las materias: la primera del usuario (si no tiene, se crea)
+    const carreraExistente = await client.query('SELECT id FROM carreras WHERE usuario_id = $1 ORDER BY id LIMIT 1', [uid]);
+    let carreraId;
+    if (carreraExistente.rows.length) {
+      carreraId = carreraExistente.rows[0].id;
+    } else {
+      const nuevaCarrera = await client.query('INSERT INTO carreras (usuario_id, nombre) VALUES ($1, $2) RETURNING id', [
+        uid,
+        (carrera && String(carrera).trim().slice(0, 120)) || 'Mi carrera'
+      ]);
+      carreraId = nuevaCarrera.rows[0].id;
+    }
+
     for (const m of materias) {
       if (!m.nombre) continue;
       const r = await client.query(
         `INSERT INTO materias
            (usuario_id, nombre, anio_carrera, cuatrimestre, estado, nota_final,
-            modalidad_aprobacion, clases_totales, inasistencias, asistencia_minima)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+            modalidad_aprobacion, clases_totales, inasistencias, asistencia_minima, carrera_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
         [
           uid,
           m.nombre,
@@ -394,7 +407,8 @@ const migrarInvitado = async (req, res) => {
           m.modalidad_aprobacion ? String(m.modalidad_aprobacion).toLowerCase() : null,
           m.clases_totales ?? 0,
           m.inasistencias ?? 0,
-          m.asistencia_minima ?? 75
+          m.asistencia_minima ?? 75,
+          carreraId
         ]
       );
       mapa.set(m.id, r.rows[0].id);

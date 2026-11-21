@@ -1,8 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { TEMA_CLARO_CSS } from './temaClaro';
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || '',
@@ -22,6 +21,29 @@ interface Usuario {
   cuatrimestre_actual?: string | null;
 }
 
+interface Carrera {
+  id: number;
+  nombre: string;
+  universidad?: string | null;
+  anio_ingreso?: number | null;
+  cuatrimestre_actual?: string | null;
+}
+
+interface NotaCalendario {
+  id: number;
+  fecha: string;
+  texto: string;
+}
+
+interface FilaImportacion {
+  incluir: boolean;
+  nombre: string;
+  codigo: string | null;
+  anio: number;
+  cuatrimestre: string;
+  correlativas: string;
+}
+
 interface Materia {
   id: number;
   nombre: string;
@@ -35,6 +57,7 @@ interface Materia {
   modalidad_aprobacion?: string | null;
   nota_final?: number | null;
   asistencia_minima?: number;
+  carrera_id?: number | null;
   color?: string | null;
   nota_promocion?: number | string | null;
   nota_regularidad?: number | string | null;
@@ -188,6 +211,28 @@ const PALETA_MATERIAS = [
 const ORDEN_ESTADO = ['cursando', 'regular', 'pendiente', 'aprobada', 'desaprobada'];
 const ORDEN_CUATRI: Record<string, number> = { '1ro': 1, '2do': 2, Anual: 3 };
 
+// En la base se guarda "1ro" / "2do" / "Anual"; en pantalla se muestra completo
+const etiquetaCuatri = (v: string | number | null | undefined) => {
+  const t = String(v ?? '');
+  if (t === '1ro') return '1er cuatrimestre';
+  if (t === '2do') return '2do cuatrimestre';
+  return t;
+};
+
+const normalizarCuatri = (texto: string) => {
+  const t = texto.toLowerCase();
+  if (t.includes('anual')) return 'Anual';
+  if (/(^|\D)2|segund/.test(t)) return '2do';
+  return '1ro';
+};
+
+const escaparHtml = (texto: unknown) =>
+  String(texto ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
 const cargarConfig = (): Config => {
   if (typeof window === 'undefined') return CONFIG_POR_DEFECTO;
   try {
@@ -287,6 +332,44 @@ export default function Home() {
   const [passGuardando, setPassGuardando] = useState(false);
   const [materiaPorBorrar, setMateriaPorBorrar] = useState<Materia | null>(null);
   const [autenticando, setAutenticando] = useState(false);
+
+  // Edición de parciales, correlativas y plan
+  const [examenEditando, setExamenEditando] = useState<Examen | null>(null);
+  const [formExamen, setFormExamen] = useState({ materia_id: '', titulo: '', fecha: '', notas_estudio: '' });
+  const [errorExamen, setErrorExamen] = useState('');
+  const [corrVista, setCorrVista] = useState<'anio' | 'importancia'>('anio');
+  const [corrImportancia, setCorrImportancia] = useState<'habilita' | 'requiere'>('habilita');
+  const [corrAgregandoA, setCorrAgregandoA] = useState<number | null>(null);
+  const [corrNuevoReq, setCorrNuevoReq] = useState('');
+  const [corrNuevoTipo, setCorrNuevoTipo] = useState<'regular' | 'aprobada'>('regular');
+
+  // Carreras
+  const [carreras, setCarreras] = useState<Carrera[]>([]);
+  const [carreraActivaId, setCarreraActivaId] = useState<number | null>(null);
+  const carreraActivaRef = useRef<number | null>(null);
+  const [mostrarFormCarrera, setMostrarFormCarrera] = useState(false);
+  const [carreraEditandoId, setCarreraEditandoId] = useState<number | null>(null);
+  const [carreraForm, setCarreraForm] = useState({
+    nombre: '',
+    universidad: '',
+    anio_ingreso: '',
+    cuatrimestre_actual: '',
+  });
+  const [carreraPorBorrar, setCarreraPorBorrar] = useState<Carrera | null>(null);
+  const [errorCarrera, setErrorCarrera] = useState('');
+
+  // Notas del calendario
+  const [notas, setNotas] = useState<NotaCalendario[]>([]);
+  const [notaTexto, setNotaTexto] = useState('');
+  const [notaEditandoId, setNotaEditandoId] = useState<number | null>(null);
+  const [notaEditTexto, setNotaEditTexto] = useState('');
+
+  // Importación de plan de estudios
+  const [impPaso, setImpPaso] = useState<'inicio' | 'revisar'>('inicio');
+  const [impFilas, setImpFilas] = useState<FilaImportacion[]>([]);
+  const [impCargando, setImpCargando] = useState(false);
+  const [impError, setImpError] = useState('');
+  const [impResultado, setImpResultado] = useState('');
   const [verPassword, setVerPassword] = useState(false);
 
   // Configuración de la app (se guarda en este dispositivo)
@@ -312,7 +395,7 @@ export default function Home() {
   const [migrando, setMigrando] = useState(false);
 
   const [tab, setTab] = useState<
-    'materias' | 'horarios' | 'examenes' | 'tps' | 'calendario' | 'correlativas'
+    'materias' | 'horarios' | 'examenes' | 'tps' | 'calendario' | 'correlativas' | 'plan'
   >('materias');
 
   const [materias, setMaterias] = useState<Materia[]>([]);
@@ -373,6 +456,7 @@ export default function Home() {
     correlativas?: Correlativa[];
     examenes?: Examen[];
     tps?: TrabajoPractico[];
+    notas?: NotaCalendario[];
   }) => {
     const actual = JSON.parse(localStorage.getItem('organizador_guest_data') || '{}');
     const actualizado = { ...actual, ...datos };
@@ -381,13 +465,40 @@ export default function Home() {
 
   const cargarDatosAuth = useCallback(async (authToken: string) => {
     const headers = { Authorization: `Bearer ${authToken}` };
-    const [resMe, resMat, resHor, resCorr, resExam, resTps] = await Promise.all([
+
+    // Primero las carreras, para saber cuál está activa
+    let listaCarreras: Carrera[] = [];
+    try {
+      const resCar = await fetch(`${BASE_API}/carreras`, { headers });
+      if (resCar.ok) {
+        const dataCar = await resCar.json();
+        if (Array.isArray(dataCar)) listaCarreras = dataCar;
+      }
+    } catch {
+      // si falla, se carga todo sin separar por carrera
+    }
+
+    let activa = carreraActivaRef.current;
+    if (!listaCarreras.some((c) => c.id === activa)) {
+      let guardada = NaN;
+      try {
+        guardada = Number(localStorage.getItem('aulatrack_carrera_activa'));
+      } catch {
+        // sin acceso al almacenamiento
+      }
+      activa = listaCarreras.some((c) => c.id === guardada) ? guardada : listaCarreras[0]?.id ?? null;
+    }
+    carreraActivaRef.current = activa;
+    const q = activa ? `?carrera_id=${activa}` : '';
+
+    const [resMe, resMat, resHor, resCorr, resExam, resTps, resNotas] = await Promise.all([
       fetch(`${BASE_API}/auth/me`, { headers }),
-      fetch(`${BASE_API}/materias`, { headers }),
-      fetch(`${BASE_API}/horarios`, { headers }),
-      fetch(`${BASE_API}/correlativas`, { headers }),
-      fetch(`${BASE_API}/examenes`, { headers }),
-      fetch(`${BASE_API}/tps`, { headers }),
+      fetch(`${BASE_API}/materias${q}`, { headers }),
+      fetch(`${BASE_API}/horarios${q}`, { headers }),
+      fetch(`${BASE_API}/correlativas${q}`, { headers }),
+      fetch(`${BASE_API}/examenes${q}`, { headers }),
+      fetch(`${BASE_API}/tps${q}`, { headers }),
+      fetch(`${BASE_API}/notas`, { headers }),
     ]);
 
     if (!resMe.ok) {
@@ -398,33 +509,37 @@ export default function Home() {
       return;
     }
 
-    const [dataMe, dataMat, dataHor, dataCorr, dataExam, dataTps] = await Promise.all([
+    const [dataMe, dataMat, dataHor, dataCorr, dataExam, dataTps, dataNotas] = await Promise.all([
       resMe.json(),
       resMat.json(),
       resHor.json(),
       resCorr.json(),
       resExam.json(),
       resTps.json(),
+      resNotas.json().catch(() => []),
     ]);
 
-    setUsuario(dataMe);
+    // Los datos de la carrera activa se muestran como los datos académicos del usuario
+    const carreraActiva = listaCarreras.find((c) => c.id === activa);
+    setUsuario(
+      carreraActiva
+        ? {
+            ...dataMe,
+            carrera: carreraActiva.nombre,
+            universidad: carreraActiva.universidad ?? null,
+            anio_ingreso: carreraActiva.anio_ingreso ?? null,
+            cuatrimestre_actual: carreraActiva.cuatrimestre_actual ?? null,
+          }
+        : dataMe
+    );
+    setCarreras(listaCarreras);
+    setCarreraActivaId(activa);
     if (Array.isArray(dataMat)) setMaterias(dataMat);
     if (Array.isArray(dataHor)) setHorarios(dataHor);
     if (Array.isArray(dataCorr)) setCorrelativas(dataCorr);
     if (Array.isArray(dataExam)) setExamenes(dataExam);
     if (Array.isArray(dataTps)) setTps(dataTps);
-  }, []);
-
-  // Estilos del modo claro (se inyectan una sola vez) y título de la pestaña
-  useEffect(() => {
-    let estilo = document.getElementById('aulatrack-tema') as HTMLStyleElement | null;
-    if (!estilo) {
-      estilo = document.createElement('style');
-      estilo.id = 'aulatrack-tema';
-      document.head.appendChild(estilo);
-    }
-    estilo.textContent = TEMA_CLARO_CSS;
-    document.title = `${APP_NOMBRE} | ${APP_SUBTITULO}`;
+    if (Array.isArray(dataNotas)) setNotas(dataNotas);
   }, []);
 
   // Aplica el tema (claro / oscuro / automático) y el tamaño de letra
@@ -483,6 +598,7 @@ export default function Home() {
           setCorrelativas(guestRaw.correlativas || []);
           setExamenes(guestRaw.examenes || []);
           setTps(guestRaw.tps || []);
+          setNotas(guestRaw.notas || []);
           setVerificandoSesion(false);
         }
         return;
@@ -514,6 +630,7 @@ export default function Home() {
     setCorrelativas(guestRaw.correlativas || []);
     setExamenes(guestRaw.examenes || []);
     setTps(guestRaw.tps || []);
+    setNotas(guestRaw.notas || []);
     guardarGuestLocal({ usuario: userInvitado });
   };
 
@@ -587,6 +704,10 @@ export default function Home() {
     setExamenes([]);
     setTps([]);
     setCorrelativas([]);
+    setNotas([]);
+    setCarreras([]);
+    setCarreraActivaId(null);
+    carreraActivaRef.current = null;
   };
 
   const exportarCSV = () => {
@@ -596,7 +717,7 @@ export default function Home() {
       const pct = m.clases_totales > 0 ? Math.round((presentes / m.clases_totales) * 100) : 100;
       return [
         `${m.anio_carrera}°`,
-        m.cuatrimestre,
+        etiquetaCuatri(m.cuatrimestre),
         `"${m.nombre.replace(/"/g, '""')}"`,
         m.estado.toUpperCase(),
         m.modalidad_aprobacion ? m.modalidad_aprobacion.toUpperCase() : '-',
@@ -625,7 +746,7 @@ export default function Home() {
         (m) => `
         <tr>
           <td>${m.anio_carrera}° Año</td>
-          <td>${m.cuatrimestre}</td>
+          <td>${etiquetaCuatri(m.cuatrimestre)}</td>
           <td><strong>${m.nombre}</strong></td>
           <td>${m.estado.toUpperCase()}</td>
           <td>${m.modalidad_aprobacion || '-'}</td>
@@ -716,6 +837,7 @@ export default function Home() {
           nota_final: estado === 'aprobada' && notaFinal ? Number(notaFinal) : null,
           modalidad_aprobacion: estado === 'aprobada' ? modalidadAprobacion.toLowerCase() : null,
           asistencia_minima: Number(asistenciaMinima) || 75,
+          carrera_id: carreraActivaRef.current,
         }),
       });
 
@@ -891,7 +1013,7 @@ export default function Home() {
         guardarGuestLocal({ materias: [], horarios: [], examenes: [], tps: [], correlativas: [] });
       } else {
         if (!token) return;
-        const res = await fetch(`${BASE_API}/materias`, {
+        const res = await fetch(`${BASE_API}/materias${carreraActivaRef.current ? `?carrera_id=${carreraActivaRef.current}` : ''}`, {
           method: 'DELETE',
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -1005,14 +1127,40 @@ export default function Home() {
       setPerfilError('El año de ingreso no es válido');
       return;
     }
-    await guardarPerfil({
-      nombre,
-      apellido: datosAcad.apellido.trim() || null,
-      universidad: datosAcad.universidad.trim() || null,
-      carrera: datosAcad.carrera.trim() || null,
-      anio_ingreso: anio,
-      cuatrimestre_actual: datosAcad.cuatrimestre_actual || null,
-    });
+    if (modoSesion === 'guest' || !carreraActivaRef.current || !token) {
+      await guardarPerfil({
+        nombre,
+        apellido: datosAcad.apellido.trim() || null,
+        universidad: datosAcad.universidad.trim() || null,
+        carrera: datosAcad.carrera.trim() || null,
+        anio_ingreso: anio,
+        cuatrimestre_actual: datosAcad.cuatrimestre_actual || null,
+      });
+      return;
+    }
+    // Con cuenta: el nombre y apellido son de la persona; el resto, de la carrera activa
+    await guardarPerfil({ nombre, apellido: datosAcad.apellido.trim() || null });
+    try {
+      const res = await fetch(`${BASE_API}/carreras/${carreraActivaRef.current}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          nombre: datosAcad.carrera.trim() || 'Mi carrera',
+          universidad: datosAcad.universidad.trim() || null,
+          anio_ingreso: anio,
+          cuatrimestre_actual: datosAcad.cuatrimestre_actual || null,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setPerfilError(data.error || 'No se pudieron guardar los datos de la carrera');
+        return;
+      }
+      await cargarDatosAuth(token);
+      setPerfilMsg('Cambios guardados');
+    } catch {
+      setPerfilError('No se pudo conectar con el servidor');
+    }
   };
 
   const enviarComentario = async (e: React.FormEvent) => {
@@ -1131,7 +1279,7 @@ export default function Home() {
     await fetch(`${BASE_API}/materias/importar`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ lista: items }),
+      body: JSON.stringify({ lista: items, carrera_id: carreraActivaRef.current }),
     });
     setMostrarImportador(false);
     setTextoImportar('');
@@ -1150,7 +1298,7 @@ export default function Home() {
       return {
         nombre: partes[0],
         anio_carrera: Number(partes[1]) || 1,
-        cuatrimestre: ['1ro', '2do', 'Anual'].includes(partes[2]) ? partes[2] : '1ro',
+        cuatrimestre: normalizarCuatri(partes[2] || ''),
       };
     });
     importarPlan(lista);
@@ -1333,6 +1481,398 @@ export default function Home() {
   const agregarIntento = (examen: Examen) => guardarExamen(examen, [...intentosDe(examen), null]);
 
   const quitarUltimoIntento = (examen: Examen) => guardarExamen(examen, intentosDe(examen).slice(0, -1));
+
+  // ---------- Carreras ----------
+  const recordarCarreraActiva = (id: number | null) => {
+    carreraActivaRef.current = id;
+    setCarreraActivaId(id);
+    try {
+      if (id) localStorage.setItem('aulatrack_carrera_activa', String(id));
+      else localStorage.removeItem('aulatrack_carrera_activa');
+    } catch {
+      // sin acceso al almacenamiento
+    }
+  };
+
+  const cambiarCarrera = async (id: number) => {
+    if (!token || id === carreraActivaRef.current) return;
+    recordarCarreraActiva(id);
+    await cargarDatosAuth(token);
+  };
+
+  const abrirFormCarrera = (c?: Carrera) => {
+    setErrorCarrera('');
+    setCarreraEditandoId(c ? c.id : null);
+    setCarreraForm({
+      nombre: c?.nombre ?? '',
+      universidad: c?.universidad ?? '',
+      anio_ingreso: c?.anio_ingreso ? String(c.anio_ingreso) : '',
+      cuatrimestre_actual: c?.cuatrimestre_actual ?? '',
+    });
+    setMostrarFormCarrera(true);
+  };
+
+  const guardarFormCarrera = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorCarrera('');
+    const nombre = carreraForm.nombre.trim();
+    if (!nombre) {
+      setErrorCarrera('Poné el nombre de la carrera');
+      return;
+    }
+    const anio = carreraForm.anio_ingreso === '' ? null : Number(carreraForm.anio_ingreso);
+    if (anio !== null && (!Number.isInteger(anio) || anio < 1950 || anio > new Date().getFullYear() + 1)) {
+      setErrorCarrera('El año de ingreso no es válido');
+      return;
+    }
+    if (!token) return;
+    try {
+      const res = await fetch(
+        carreraEditandoId ? `${BASE_API}/carreras/${carreraEditandoId}` : `${BASE_API}/carreras`,
+        {
+          method: carreraEditandoId ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            nombre,
+            universidad: carreraForm.universidad.trim() || null,
+            anio_ingreso: anio,
+            cuatrimestre_actual: carreraForm.cuatrimestre_actual || null,
+          }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErrorCarrera(data.error || 'No se pudo guardar la carrera');
+        return;
+      }
+      setMostrarFormCarrera(false);
+      if (!carreraEditandoId && data.id) recordarCarreraActiva(data.id);
+      await cargarDatosAuth(token);
+    } catch {
+      setErrorCarrera('No se pudo conectar con el servidor');
+    }
+  };
+
+  const eliminarCarreraElegida = async () => {
+    if (!carreraPorBorrar || !token) return;
+    const eliminada = carreraPorBorrar;
+    setCarreraPorBorrar(null);
+    setErrorCarrera('');
+    try {
+      const res = await fetch(`${BASE_API}/carreras/${eliminada.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setErrorCarrera(data.error || 'No se pudo eliminar la carrera');
+        return;
+      }
+      if (carreraActivaRef.current === eliminada.id) recordarCarreraActiva(null);
+      await cargarDatosAuth(token);
+    } catch {
+      setErrorCarrera('No se pudo conectar con el servidor');
+    }
+  };
+
+  // ---------- Notas del calendario ----------
+  const agregarNota = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const texto = notaTexto.trim();
+    if (!texto || !diaSeleccionado) return;
+    if (modoSesion === 'guest') {
+      const nuevas = [...notas, { id: Date.now(), fecha: diaSeleccionado, texto }];
+      setNotas(nuevas);
+      guardarGuestLocal({ notas: nuevas });
+      setNotaTexto('');
+      return;
+    }
+    if (!token) return;
+    await fetch(`${BASE_API}/notas`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ fecha: diaSeleccionado, texto }),
+    });
+    setNotaTexto('');
+    cargarDatosAuth(token);
+  };
+
+  const guardarEdicionNota = async (id: number) => {
+    const texto = notaEditTexto.trim();
+    if (!texto) return;
+    if (modoSesion === 'guest') {
+      const nuevas = notas.map((n) => (n.id === id ? { ...n, texto } : n));
+      setNotas(nuevas);
+      guardarGuestLocal({ notas: nuevas });
+      setNotaEditandoId(null);
+      return;
+    }
+    if (!token) return;
+    await fetch(`${BASE_API}/notas/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ texto }),
+    });
+    setNotaEditandoId(null);
+    cargarDatosAuth(token);
+  };
+
+  const eliminarNota = async (id: number) => {
+    if (modoSesion === 'guest') {
+      const nuevas = notas.filter((n) => n.id !== id);
+      setNotas(nuevas);
+      guardarGuestLocal({ notas: nuevas });
+      return;
+    }
+    if (!token) return;
+    await fetch(`${BASE_API}/notas/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    cargarDatosAuth(token);
+  };
+
+  // ---------- Importación de plan desde archivo ----------
+  const analizarPlan = async (cuerpo: { nombre?: string; contenido?: string; texto?: string }) => {
+    setImpError('');
+    setImpResultado('');
+    if (!token) return;
+    setImpCargando(true);
+    try {
+      const res = await fetch(`${BASE_API}/importar/analizar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(cuerpo),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setImpError(data.error || 'No se pudo leer el plan');
+        return;
+      }
+      setImpFilas(
+        (data.materias as { nombre: string; codigo: string | null; anio: number; cuatrimestre: string; correlativas: string[] }[]).map(
+          (m) => ({
+            incluir: true,
+            nombre: m.nombre,
+            codigo: m.codigo ?? null,
+            anio: m.anio,
+            cuatrimestre: m.cuatrimestre,
+            correlativas: (m.correlativas || []).join(', '),
+          })
+        )
+      );
+      setImpPaso('revisar');
+    } catch {
+      setImpError('No se pudo conectar con el servidor (si estaba dormido, probá de nuevo en un minuto)');
+    } finally {
+      setImpCargando(false);
+    }
+  };
+
+  const elegirArchivoPlan = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const archivo = e.target.files?.[0];
+    e.target.value = '';
+    if (!archivo) return;
+    if (archivo.size > 8 * 1024 * 1024) {
+      setImpError('El archivo es muy pesado (máximo 8 MB)');
+      return;
+    }
+    const lector = new FileReader();
+    lector.onerror = () => setImpError('No se pudo leer el archivo');
+    lector.onload = () => {
+      const resultado = String(lector.result || '');
+      const base64 = resultado.includes(',') ? resultado.split(',')[1] : resultado;
+      analizarPlan({ nombre: archivo.name, contenido: base64 });
+    };
+    lector.readAsDataURL(archivo);
+  };
+
+  const cambiarFilaImportacion = (indice: number, cambios: Partial<FilaImportacion>) =>
+    setImpFilas((prev) => prev.map((f, i) => (i === indice ? { ...f, ...cambios } : f)));
+
+  const confirmarImportacion = async () => {
+    const lista = impFilas
+      .filter((f) => f.incluir && f.nombre.trim())
+      .map((f) => ({
+        nombre: f.nombre.trim(),
+        codigo: f.codigo,
+        anio_carrera: f.anio,
+        cuatrimestre: f.cuatrimestre,
+        correlativas: f.correlativas
+          .split(',')
+          .map((x) => x.trim())
+          .filter(Boolean),
+      }));
+    if (lista.length === 0) {
+      setImpError('Marcá al menos una materia para importar');
+      return;
+    }
+    if (!token) return;
+    setImpError('');
+    setImpCargando(true);
+    try {
+      const res = await fetch(`${BASE_API}/materias/importar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ lista, carrera_id: carreraActivaRef.current }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setImpError(data.error || 'No se pudieron importar las materias');
+        return;
+      }
+      const partes = [`Se crearon ${data.creadas} materia${data.creadas === 1 ? '' : 's'}`];
+      if (data.correlativas) partes.push(`${data.correlativas} correlativa${data.correlativas === 1 ? '' : 's'} vinculada${data.correlativas === 1 ? '' : 's'}`);
+      if (data.omitidas?.length) partes.push(`${data.omitidas.length} ya existían y se omitieron`);
+      if (data.sin_resolver?.length) partes.push(`${data.sin_resolver.length} correlativa${data.sin_resolver.length === 1 ? '' : 's'} sin encontrar (cargalas desde la pestaña Correlativas)`);
+      setImpResultado(partes.join(' · '));
+      setImpPaso('inicio');
+      setImpFilas([]);
+      await cargarDatosAuth(token);
+    } catch {
+      setImpError('No se pudo conectar con el servidor');
+    } finally {
+      setImpCargando(false);
+    }
+  };
+
+  const abrirEdicionExamen = (ex: Examen) => {
+    setErrorExamen('');
+    setExamenEditando(ex);
+    setFormExamen({
+      materia_id: String(ex.materia_id),
+      titulo: ex.titulo,
+      fecha: ex.fecha.split('T')[0],
+      notas_estudio: ex.notas_estudio || '',
+    });
+  };
+
+  const guardarEdicionExamen = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!examenEditando) return;
+    const titulo = formExamen.titulo.trim();
+    const materia = materias.find((m) => m.id === Number(formExamen.materia_id));
+    if (!materia) {
+      setErrorExamen('Elegí una materia');
+      return;
+    }
+    if (!titulo) {
+      setErrorExamen('Poné qué instancia es (parcial, final, recuperatorio...)');
+      return;
+    }
+    if (!formExamen.fecha) {
+      setErrorExamen('Elegí una fecha');
+      return;
+    }
+    const notas = formExamen.notas_estudio.trim() || null;
+
+    if (modoSesion === 'guest') {
+      const nuevos = examenes.map((ex) =>
+        ex.id === examenEditando.id
+          ? { ...ex, materia_id: materia.id, materia_nombre: materia.nombre, titulo, fecha: formExamen.fecha, notas_estudio: notas }
+          : ex
+      );
+      setExamenes(nuevos);
+      guardarGuestLocal({ examenes: nuevos });
+      setExamenEditando(null);
+      return;
+    }
+
+    if (!token) return;
+    try {
+      const res = await fetch(`${BASE_API}/examenes/${examenEditando.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ materia_id: materia.id, titulo, fecha: formExamen.fecha, notas_estudio: notas }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setErrorExamen(data.error || 'No se pudieron guardar los cambios');
+        return;
+      }
+      setExamenEditando(null);
+      cargarDatosAuth(token);
+    } catch {
+      setErrorExamen('No se pudo conectar con el servidor');
+    }
+  };
+
+  // Vincula (o actualiza la condición de) una o varias correlativas de una materia
+  const vincularCorrelativas = async (materiaId: number, ids: number[], tipo: 'regular' | 'aprobada') => {
+    setErrorCorr('');
+    if (modoSesion === 'guest') {
+      const mDest = materias.find((m) => m.id === materiaId);
+      if (!mDest) return;
+      const pares: Correlativa[] = [];
+      for (const id of ids) {
+        const mReq = materias.find((m) => m.id === id);
+        if (!mReq) continue;
+        pares.push({
+          materia_id: mDest.id,
+          correlativa_id: mReq.id,
+          tipo_requisito: tipo,
+          materia_nombre: mDest.nombre,
+          correlativa_nombre: mReq.nombre,
+          correlativa_estado: mReq.estado,
+        });
+      }
+      const resto = correlativas.filter((c) => !(c.materia_id === mDest.id && ids.includes(c.correlativa_id)));
+      const nuevas = [...resto, ...pares];
+      setCorrelativas(nuevas);
+      guardarGuestLocal({ correlativas: nuevas });
+      return;
+    }
+    if (!token) return;
+    try {
+      const res = await fetch(`${BASE_API}/correlativas`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ materia_id: materiaId, correlativa_ids: ids, tipo_requisito: tipo }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setErrorCorr(data.error || 'No se pudo guardar la correlativa');
+        return;
+      }
+      cargarDatosAuth(token);
+    } catch {
+      setErrorCorr('No se pudo conectar con el servidor');
+    }
+  };
+
+  const cambiarTipoCorrelativa = (c: Correlativa) =>
+    vincularCorrelativas(c.materia_id, [c.correlativa_id], c.tipo_requisito === 'aprobada' ? 'regular' : 'aprobada');
+
+  const imprimirPlan = () => {
+    const ventana = window.open('', '_blank');
+    if (!ventana) return;
+    const anios = Array.from(new Set<number>(materias.map((m: Materia) => m.anio_carrera ?? 1))).sort((a, b) => a - b);
+    const secciones = anios
+      .map((anio) => {
+        const filas = materias
+          .filter((m: Materia) => (m.anio_carrera ?? 1) === anio)
+          .sort(compararMaterias)
+          .map((m: Materia) => {
+            const reqs = (correlativas as Correlativa[])
+              .filter((c) => c.materia_id === m.id)
+              .map((c) => `${escaparHtml(c.correlativa_nombre)} (${c.tipo_requisito === 'aprobada' ? 'aprobada' : 'regular'})`)
+              .join(', ');
+            return `<tr><td>${escaparHtml(m.nombre)}</td><td>${escaparHtml(etiquetaCuatri(m.cuatrimestre))}</td><td>${reqs || '—'}</td><td>${escaparHtml(m.estado)}</td></tr>`;
+          })
+          .join('');
+        return `<h2>${anio}° Año</h2><table><thead><tr><th>Materia</th><th>Cuatrimestre</th><th>Correlativas</th><th>Estado</th></tr></thead><tbody>${filas}</tbody></table>`;
+      })
+      .join('');
+    const titulo = escaparHtml(usuario?.carrera || 'Plan de estudios');
+    ventana.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Plan de estudios - ${titulo}</title>
+      <style>body{font-family:Arial,sans-serif;color:#111;padding:24px}h1{margin:0 0 4px}h2{margin:22px 0 8px;font-size:16px}
+      table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;vertical-align:top}
+      th{background:#f1f5f9}p{color:#555;margin:0}</style></head><body>
+      <h1>AulaTrack · Plan de estudios</h1><p>${titulo}</p>${secciones}</body></html>`);
+    ventana.document.close();
+    ventana.focus();
+    setTimeout(() => ventana.print(), 300);
+  };
 
   const eliminarExamen = async (id: number) => {
     if (modoSesion === 'guest') {
@@ -2003,10 +2543,18 @@ export default function Home() {
 
   const bordeTarjetaMateria: Record<Materia['estado'], string> = {
     pendiente: 'border-zinc-800',
-    cursando: 'border-blue-900/70',
-    regular: 'border-amber-700/70',
-    aprobada: 'border-emerald-700/70',
-    desaprobada: 'border-red-700/70',
+    cursando: 'border-blue-500/70',
+    regular: 'border-amber-500',
+    aprobada: 'border-emerald-500',
+    desaprobada: 'border-red-500',
+  };
+
+  const fondoTarjetaMateria: Record<Materia['estado'], string> = {
+    pendiente: 'bg-zinc-900',
+    cursando: 'bg-blue-900/30',
+    regular: 'bg-amber-800/35',
+    aprobada: 'bg-emerald-800/40',
+    desaprobada: 'bg-red-800/40',
   };
 
   const coloresCondicionExamen: Record<Examen['condicion'], string> = {
@@ -2020,6 +2568,7 @@ export default function Home() {
   const fechaFiltroAgenda = diaSeleccionado || prefijoMesActual;
   const examenesAgenda = examenes.filter((ex) => ex.fecha.startsWith(fechaFiltroAgenda));
   const tpsAgenda = tps.filter((tp) => tp.fecha_entrega.startsWith(fechaFiltroAgenda));
+  const notasAgenda = notas.filter((n: NotaCalendario) => n.fecha.split('T')[0].startsWith(fechaFiltroAgenda));
 
   const compararMaterias = (a: Materia, b: Materia) => {
     if (cfg.ordenMaterias === 'estado') {
@@ -2045,20 +2594,26 @@ export default function Home() {
     return c.tipo_requisito === 'aprobada' ? est === 'aprobada' : est === 'regular' || est === 'aprobada';
   };
 
-  type GrupoCorrelativas = { materia_id: number; nombre: string; reqs: Correlativa[] };
-  const gruposMap: Record<number, GrupoCorrelativas> = {};
+  const requiereN: Record<number, number> = {};
+  const habilitaN: Record<number, number> = {};
   for (const c of correlativas as Correlativa[]) {
-    if (!gruposMap[c.materia_id]) {
-      gruposMap[c.materia_id] = {
-        materia_id: c.materia_id,
-        nombre: c.materia_nombre || materias.find((m) => m.id === c.materia_id)?.nombre || 'Materia',
-        reqs: [],
-      };
-    }
-    gruposMap[c.materia_id].reqs.push(c);
+    requiereN[c.materia_id] = (requiereN[c.materia_id] ?? 0) + 1;
+    habilitaN[c.correlativa_id] = (habilitaN[c.correlativa_id] ?? 0) + 1;
   }
-  const correlativasPorMateria: GrupoCorrelativas[] = (Object.values(gruposMap) as GrupoCorrelativas[]).sort(
-    (a, b) => a.nombre.localeCompare(b.nombre)
+
+  const nivelImportancia = (n: number) =>
+    n >= 4
+      ? { texto: 'Crítica', clase: 'bg-red-950 text-red-300', barra: 'bg-red-500' }
+      : n === 3
+      ? { texto: 'Alta', clase: 'bg-orange-950 text-orange-300', barra: 'bg-orange-500' }
+      : n === 2
+      ? { texto: 'Media', clase: 'bg-amber-950 text-amber-300', barra: 'bg-amber-500' }
+      : n === 1
+      ? { texto: 'Baja', clase: 'bg-sky-950 text-sky-300', barra: 'bg-sky-500' }
+      : { texto: 'Sin dependencias', clase: 'bg-zinc-800 text-zinc-400', barra: 'bg-zinc-600' };
+
+  const aniosDelPlan: number[] = Array.from(new Set<number>(materias.map((m: Materia) => m.anio_carrera ?? 1))).sort(
+    (a, b) => a - b
   );
 
   const proximosVencimientos = !cfg.avisosActivos ? [] : [
@@ -2702,9 +3257,193 @@ export default function Home() {
             </div>
           </form>
 
+          {modoSesion === 'auth' && (
+            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 sm:p-6 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-base font-bold text-zinc-100">Mis carreras</h2>
+                  <p className="text-xs text-zinc-400">
+                    Cada carrera tiene sus propias materias, horarios, parciales y correlativas.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => abrirFormCarrera()}
+                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold px-3 py-2 rounded-lg cursor-pointer"
+                >
+                  + Agregar carrera
+                </button>
+              </div>
+
+              {errorCarrera && !mostrarFormCarrera && (
+                <div className="bg-red-950/60 border border-red-800 text-red-300 text-xs px-3 py-2.5 rounded-lg">
+                  {errorCarrera}
+                </div>
+              )}
+
+              <div className="space-y-2">
+                {carreras.map((c) => (
+                  <div
+                    key={c.id}
+                    className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-4 py-3 ${
+                      c.id === carreraActivaId
+                        ? 'bg-blue-950/30 border-blue-700'
+                        : 'bg-zinc-950/60 border-zinc-800'
+                    }`}
+                  >
+                    <div>
+                      <p className="text-sm font-semibold text-zinc-100">
+                        🎓 {c.nombre}{' '}
+                        {c.id === carreraActivaId && (
+                          <span className="ml-1 text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded-full">
+                            En uso
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-xs text-zinc-400">
+                        {[c.universidad, c.anio_ingreso ? `Ingreso ${c.anio_ingreso}` : null, c.cuatrimestre_actual]
+                          .filter(Boolean)
+                          .join(' · ') || 'Sin más datos'}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {c.id !== carreraActivaId && (
+                        <button
+                          type="button"
+                          onClick={() => cambiarCarrera(c.id)}
+                          className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-100 border border-zinc-700 px-3 py-1.5 rounded-lg cursor-pointer"
+                        >
+                          Usar esta
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => abrirFormCarrera(c)}
+                        title="Editar"
+                        className="text-zinc-400 hover:text-blue-400 p-1.5 cursor-pointer"
+                      >
+                        ✎
+                      </button>
+                      {carreras.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setCarreraPorBorrar(c)}
+                          title="Eliminar"
+                          className="text-zinc-400 hover:text-red-400 p-1.5 cursor-pointer"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {mostrarFormCarrera && (
+                <form
+                  onSubmit={guardarFormCarrera}
+                  className="border-t border-zinc-800 pt-4 grid grid-cols-1 sm:grid-cols-2 gap-3"
+                >
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs text-zinc-400 mb-1">Nombre de la carrera</label>
+                    <input
+                      type="text"
+                      value={carreraForm.nombre}
+                      onChange={(e) => setCarreraForm({ ...carreraForm, nombre: e.target.value })}
+                      maxLength={120}
+                      placeholder="Ej: Contador Público"
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                      required
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs text-zinc-400 mb-1">Universidad / institución</label>
+                    <input
+                      type="text"
+                      value={carreraForm.universidad}
+                      onChange={(e) => setCarreraForm({ ...carreraForm, universidad: e.target.value })}
+                      maxLength={120}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-zinc-400 mb-1">Año de ingreso</label>
+                    <input
+                      type="number"
+                      min="1950"
+                      max={new Date().getFullYear() + 1}
+                      value={carreraForm.anio_ingreso}
+                      onChange={(e) => setCarreraForm({ ...carreraForm, anio_ingreso: e.target.value })}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-zinc-400 mb-1">Cuatrimestre actual</label>
+                    <select
+                      value={carreraForm.cuatrimestre_actual}
+                      onChange={(e) => setCarreraForm({ ...carreraForm, cuatrimestre_actual: e.target.value })}
+                      className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                    >
+                      <option value="">Sin definir</option>
+                      <option value="1° cuatrimestre">1° cuatrimestre</option>
+                      <option value="2° cuatrimestre">2° cuatrimestre</option>
+                      <option value="Anual">Anual</option>
+                    </select>
+                  </div>
+                  {errorCarrera && (
+                    <div className="sm:col-span-2 bg-red-950/60 border border-red-800 text-red-300 text-xs px-3 py-2.5 rounded-lg">
+                      {errorCarrera}
+                    </div>
+                  )}
+                  <div className="sm:col-span-2 flex gap-2">
+                    <button
+                      type="submit"
+                      className="bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold px-4 py-2 rounded-lg cursor-pointer"
+                    >
+                      {carreraEditandoId ? 'Guardar carrera' : 'Crear y usar esta carrera'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMostrarFormCarrera(false)}
+                      className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm px-4 py-2 rounded-lg cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {carreraPorBorrar && (
+                <div className="border-t border-red-900/60 pt-4 space-y-3">
+                  <p className="text-sm text-zinc-300">
+                    ¿Eliminar <strong>{carreraPorBorrar.nombre}</strong>? Se borran también todas sus materias,
+                    horarios, parciales, TPs y correlativas. No se puede deshacer.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={eliminarCarreraElegida}
+                      className="bg-red-600 hover:bg-red-500 text-white text-sm font-semibold px-4 py-2 rounded-lg cursor-pointer"
+                    >
+                      Sí, eliminar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCarreraPorBorrar(null)}
+                      className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm px-4 py-2 rounded-lg cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {modoSesion === 'guest' && (
             <p className="text-xs text-amber-300/90">
-              Estás en modo invitado: estos datos solo se guardan en este navegador.
+              Estás en modo invitado: estos datos solo se guardan en este navegador. Para tener varias carreras
+              necesitás una cuenta.
             </p>
           )}
         </div>
@@ -2738,6 +3477,20 @@ export default function Home() {
               <span className="text-xs bg-amber-950/70 text-amber-300 border border-amber-800/60 px-2.5 py-0.5 rounded-full">
                 Modo Invitado
               </span>
+            )}
+            {modoSesion === 'auth' && carreras.length > 1 && (
+              <select
+                value={carreraActivaId ?? ''}
+                onChange={(e) => cambiarCarrera(Number(e.target.value))}
+                title="Cambiar de carrera"
+                className="text-xs bg-zinc-800/70 border border-zinc-700 text-zinc-200 rounded-full px-3 py-1 cursor-pointer max-w-56"
+              >
+                {carreras.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    🎓 {c.nombre}
+                  </option>
+                ))}
+              </select>
             )}
           </div>
 
@@ -2913,8 +3666,8 @@ export default function Home() {
                     onChange={(e) => setCampoEdit('cuatrimestre', e.target.value)}
                     className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
                   >
-                    <option value="1ro">1ro</option>
-                    <option value="2do">2do</option>
+                    <option value="1ro">1er cuatrimestre</option>
+                    <option value="2do">2do cuatrimestre</option>
                     <option value="Anual">Anual</option>
                   </select>
                 </div>
@@ -3063,6 +3816,112 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => setMateriaEditando(null)}
+                  className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm px-4 py-2.5 rounded-lg cursor-pointer"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {examenEditando && (
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <form
+              onSubmit={guardarEdicionExamen}
+              className="w-full max-w-md bg-zinc-900 border border-zinc-700 rounded-2xl p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <h2 className="text-lg font-bold text-zinc-100">Editar parcial / final</h2>
+                <button
+                  type="button"
+                  onClick={() => setExamenEditando(null)}
+                  className="text-zinc-400 hover:text-zinc-100 cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {errorExamen && (
+                <div className="bg-red-950/60 border border-red-800 text-red-300 text-xs px-3 py-2.5 rounded-lg">
+                  {errorExamen}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">Materia</label>
+                <select
+                  value={formExamen.materia_id}
+                  onChange={(e) => setFormExamen({ ...formExamen, materia_id: e.target.value })}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                >
+                  {materias.map((m: Materia) => (
+                    <option key={m.id} value={m.id}>
+                      {m.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">Instancia</label>
+                <input
+                  type="text"
+                  value={formExamen.titulo}
+                  onChange={(e) => setFormExamen({ ...formExamen, titulo: e.target.value })}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  required
+                />
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {['1er Parcial', '2do Parcial', 'Recuperatorio', 'Final'].map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setFormExamen({ ...formExamen, titulo: t })}
+                      className={`text-[11px] px-2.5 py-1 rounded-lg border cursor-pointer ${
+                        formExamen.titulo === t
+                          ? 'bg-blue-600 border-blue-500 text-white'
+                          : 'bg-zinc-950 border-zinc-700 text-zinc-300 hover:bg-zinc-800'
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">Fecha</label>
+                <input
+                  type="date"
+                  value={formExamen.fecha}
+                  onChange={(e) => setFormExamen({ ...formExamen, fecha: e.target.value })}
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">Temas / Notas</label>
+                <textarea
+                  rows={3}
+                  value={formExamen.notas_estudio}
+                  onChange={(e) => setFormExamen({ ...formExamen, notas_estudio: e.target.value })}
+                  placeholder="Ej: Unidades 1 a 3"
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="submit"
+                  className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm py-2.5 rounded-lg transition cursor-pointer"
+                >
+                  Guardar cambios
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setExamenEditando(null)}
                   className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm px-4 py-2.5 rounded-lg cursor-pointer"
                 >
                   Cancelar
@@ -3433,6 +4292,7 @@ export default function Home() {
             { id: 'tps', label: `TPs (${tps.length})` },
             { id: 'calendario', label: 'Calendario' },
             { id: 'correlativas', label: `Correlativas (${correlativas.length})` },
+            { id: 'plan', label: 'Plan de estudios' },
           ].map((item) => (
             <button
               key={item.id}
@@ -3473,14 +4333,15 @@ export default function Home() {
               </button>
             </div>
 
-            {mostrarImportador && (
+            {mostrarImportador && modoSesion === 'guest' && (
               <div className="bg-zinc-900 border border-blue-900/60 rounded-xl p-4 sm:p-5 space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div>
                     <h3 className="text-sm font-bold text-zinc-100">Importación rápida</h3>
                     <p className="text-xs text-zinc-400">
                       Una materia por línea:{' '}
-                      <code className="text-blue-400">Nombre | Año (1-6) | Cuatrimestre</code>
+                      <code className="text-blue-400">Nombre | Año (1-6) | Cuatrimestre</code>. Para importar desde un
+                      archivo necesitás una cuenta.
                     </p>
                   </div>
                   <button
@@ -3488,14 +4349,14 @@ export default function Home() {
                     onClick={() => importarPlan(PLAN_EJEMPLO_SISTEMAS)}
                     className="text-xs bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-700 px-3 py-1.5 rounded-lg cursor-pointer"
                   >
-                    Plantilla Sistemas (13 materias)
+                    Plantilla de ejemplo (13 materias)
                   </button>
                 </div>
 
                 <form onSubmit={procesarTextoImportacion} className="space-y-3">
                   <textarea
                     rows={4}
-                    placeholder={`Análisis Matemático I | 1 | 1ro\nFísica I | 1 | 2do`}
+                    placeholder={`Análisis Matemático I | 1 | 1er cuatrimestre\nFísica I | 1 | 2do cuatrimestre`}
                     value={textoImportar}
                     onChange={(e) => setTextoImportar(e.target.value)}
                     className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-xs font-mono"
@@ -3511,6 +4372,173 @@ export default function Home() {
               </div>
             )}
 
+            {mostrarImportador && modoSesion === 'auth' && (
+              <div className="bg-zinc-900 border border-blue-900/60 rounded-xl p-4 sm:p-5 space-y-4">
+                <div>
+                  <h3 className="text-sm font-bold text-zinc-100">Importar plan de estudios</h3>
+                  <p className="text-xs text-zinc-400">
+                    Subí el archivo de tu plan (Excel, Word, PDF o CSV) o pegá el texto. Vas a poder revisar y corregir
+                    todo antes de importar.
+                  </p>
+                </div>
+
+                {impError && (
+                  <div className="bg-red-950/60 border border-red-800 text-red-300 text-xs px-3 py-2.5 rounded-lg">
+                    {impError}
+                  </div>
+                )}
+                {impResultado && (
+                  <div className="bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-xs px-3 py-2.5 rounded-lg">
+                    {impResultado}
+                  </div>
+                )}
+
+                {impPaso === 'inicio' ? (
+                  <div className="space-y-4">
+                    <label className="flex flex-col items-center justify-center gap-1 border-2 border-dashed border-zinc-700 hover:border-blue-500 rounded-xl py-6 px-4 text-center cursor-pointer transition">
+                      <span className="text-2xl">📄</span>
+                      <span className="text-sm font-semibold text-zinc-100">
+                        {impCargando ? 'Leyendo el archivo...' : 'Elegir archivo'}
+                      </span>
+                      <span className="text-xs text-zinc-400">.xlsx · .docx · .pdf · .csv · .txt (máx. 8 MB)</span>
+                      <input
+                        type="file"
+                        accept=".xlsx,.xlsm,.docx,.pdf,.csv,.tsv,.txt"
+                        onChange={elegirArchivoPlan}
+                        disabled={impCargando}
+                        className="hidden"
+                      />
+                    </label>
+
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-zinc-300">O pegá el texto del plan</p>
+                      <textarea
+                        rows={5}
+                        value={textoImportar}
+                        onChange={(e) => setTextoImportar(e.target.value)}
+                        placeholder={`Primer año\nÁlgebra\nAnálisis Matemático I\nSegundo año\nFísica I | Correlativas: Álgebra`}
+                        className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-xs font-mono"
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={impCargando || !textoImportar.trim()}
+                          onClick={() => analizarPlan({ texto: textoImportar })}
+                          className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-semibold px-4 py-2 rounded-lg cursor-pointer"
+                        >
+                          {impCargando ? 'Leyendo...' : 'Analizar texto'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => importarPlan(PLAN_EJEMPLO_SISTEMAS)}
+                          className="text-xs bg-zinc-950 hover:bg-zinc-800 text-zinc-300 border border-zinc-700 px-3 py-2 rounded-lg cursor-pointer"
+                        >
+                          Usar plantilla de ejemplo (13 materias)
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-xs text-zinc-400">
+                      Encontré <strong className="text-zinc-200">{impFilas.length}</strong> materias. Desmarcá las que
+                      no correspondan y corregí lo que haga falta. En &quot;Correlativas&quot; poné los nombres separados
+                      por coma.
+                    </p>
+                    <div className="overflow-x-auto border border-zinc-800 rounded-xl">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left text-zinc-400 bg-zinc-950/60">
+                            <th className="px-2 py-2 w-8"></th>
+                            <th className="px-2 py-2 font-medium">Materia</th>
+                            <th className="px-2 py-2 font-medium w-20">Año</th>
+                            <th className="px-2 py-2 font-medium w-40">Cuatrimestre</th>
+                            <th className="px-2 py-2 font-medium">Correlativas</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {impFilas.map((f, i) => (
+                            <tr key={i} className={`border-t border-zinc-800 ${f.incluir ? '' : 'opacity-40'}`}>
+                              <td className="px-2 py-1.5">
+                                <input
+                                  type="checkbox"
+                                  checked={f.incluir}
+                                  onChange={(e) => cambiarFilaImportacion(i, { incluir: e.target.checked })}
+                                  className="accent-blue-500"
+                                />
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <input
+                                  type="text"
+                                  value={f.nombre}
+                                  onChange={(e) => cambiarFilaImportacion(i, { nombre: e.target.value })}
+                                  className="w-full min-w-44 bg-zinc-950 border border-zinc-700 rounded px-2 py-1"
+                                />
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <select
+                                  value={f.anio}
+                                  onChange={(e) => cambiarFilaImportacion(i, { anio: Number(e.target.value) })}
+                                  className="w-full bg-zinc-950 border border-zinc-700 rounded px-1 py-1"
+                                >
+                                  {[1, 2, 3, 4, 5, 6].map((a) => (
+                                    <option key={a} value={a}>
+                                      {a}°
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <select
+                                  value={f.cuatrimestre}
+                                  onChange={(e) => cambiarFilaImportacion(i, { cuatrimestre: e.target.value })}
+                                  className="w-full bg-zinc-950 border border-zinc-700 rounded px-1 py-1"
+                                >
+                                  <option value="1ro">1er cuatrimestre</option>
+                                  <option value="2do">2do cuatrimestre</option>
+                                  <option value="Anual">Anual</option>
+                                </select>
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <input
+                                  type="text"
+                                  value={f.correlativas}
+                                  onChange={(e) => cambiarFilaImportacion(i, { correlativas: e.target.value })}
+                                  placeholder="Ninguna"
+                                  className="w-full min-w-44 bg-zinc-950 border border-zinc-700 rounded px-2 py-1"
+                                />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={impCargando}
+                        onClick={confirmarImportacion}
+                        className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-semibold px-4 py-2 rounded-lg cursor-pointer"
+                      >
+                        {impCargando ? 'Importando...' : `Importar ${impFilas.filter((f) => f.incluir).length} materias`}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setImpPaso('inicio');
+                          setImpFilas([]);
+                          setImpError('');
+                        }}
+                        className="text-xs bg-zinc-950 hover:bg-zinc-800 text-zinc-300 border border-zinc-700 px-3 py-2 rounded-lg cursor-pointer"
+                      >
+                        ← Volver
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <form
               onSubmit={agregarMateria}
               className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 sm:gap-4 items-end"
@@ -3519,7 +4547,7 @@ export default function Home() {
                 <label className="block text-xs text-zinc-400 mb-1">Nombre de la materia</label>
                 <input
                   type="text"
-                  placeholder="Ej: Sistemas Operativos"
+                  placeholder="Ej: Análisis Matemático I"
                   value={nombre}
                   onChange={(e) => setNombre(e.target.value)}
                   className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
@@ -3549,8 +4577,8 @@ export default function Home() {
                   onChange={(e) => setCuatrimestre(e.target.value)}
                   className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
                 >
-                  <option value="1ro">1° Cuatrimestre</option>
-                  <option value="2do">2° Cuatrimestre</option>
+                  <option value="1ro">1er cuatrimestre</option>
+                  <option value="2do">2do cuatrimestre</option>
                   <option value="Anual">Anual</option>
                 </select>
               </div>
@@ -3695,14 +4723,16 @@ export default function Home() {
                   return (
                     <div
                       key={m.id}
-                      style={m.color ? { boxShadow: `inset 6px 0 0 0 ${m.color}` } : undefined}
-                      className={`bg-zinc-900 border-2 rounded-xl p-4 flex flex-col justify-between gap-3 ${bordeTarjetaMateria[m.estado]}`}
+                      style={m.color ? { borderColor: m.color, color: m.color } : undefined}
+                      className={`${fondoTarjetaMateria[m.estado]} border-2 rounded-xl p-4 flex flex-col justify-between gap-3 ${bordeTarjetaMateria[m.estado]} ${
+                        m.color ? 'tarjeta-color' : ''
+                      } ${!habilitada && m.estado === 'pendiente' ? 'opacity-70 border-dashed' : ''}`}
                     >
                       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                         <div>
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className="text-xs font-medium px-2 py-0.5 rounded bg-zinc-800 text-zinc-300">
-                              {m.anio_carrera}° Año · {m.cuatrimestre}
+                              {m.anio_carrera}° Año · {etiquetaCuatri(m.cuatrimestre)}
                             </span>
 
                             {m.estado === 'aprobada' && m.modalidad_aprobacion && (
@@ -4166,6 +5196,13 @@ export default function Home() {
                         </div>
 
                         <button
+                          onClick={() => abrirEdicionExamen(ex)}
+                          title="Editar parcial"
+                          className="text-zinc-500 hover:text-blue-400 p-1.5 rounded-lg hover:bg-zinc-800 cursor-pointer"
+                        >
+                          ✎
+                        </button>
+                        <button
                           onClick={() => eliminarExamen(ex.id!)}
                           className="text-zinc-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-zinc-800 cursor-pointer"
                         >
@@ -4207,7 +5244,7 @@ export default function Home() {
                 <label className="block text-xs text-zinc-400 mb-1">Trabajo Práctico</label>
                 <input
                   type="text"
-                  placeholder="Ej: TP N°2 - API REST"
+                  placeholder="Ej: TP N°2 - Informe de laboratorio"
                   value={tpTitulo}
                   onChange={(e) => setTpTitulo(e.target.value)}
                   className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
@@ -4230,7 +5267,7 @@ export default function Home() {
                 <label className="block text-xs text-zinc-400 mb-1">Consigna / Grupo</label>
                 <input
                   type="text"
-                  placeholder="Ej: Subir repo a GitHub"
+                  placeholder="Ej: Entrega en grupo de 3 personas"
                   value={tpDescripcion}
                   onChange={(e) => setTpDescripcion(e.target.value)}
                   className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
@@ -4411,6 +5448,9 @@ export default function Home() {
                 <span className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Fin cursada
                 </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-violet-500"></span> Nota
+                </span>
               </div>
 
               <div className="grid grid-cols-7 gap-1 text-center text-[11px] sm:text-xs font-semibold text-zinc-400">
@@ -4432,6 +5472,7 @@ export default function Home() {
 
                   const exDia = examenes.filter((ex) => ex.fecha.split('T')[0] === fechaIso);
                   const tpDia = tps.filter((tp) => tp.fecha_entrega.split('T')[0] === fechaIso);
+                  const notasDia = notas.filter((n: NotaCalendario) => n.fecha.split('T')[0] === fechaIso);
 
                   const hoyObj = new Date();
                   const esHoy =
@@ -4487,6 +5528,14 @@ export default function Home() {
                             className="text-[9px] sm:text-[10px] bg-sky-950/90 text-sky-200 rounded px-1 truncate"
                           >
                             TP: {tp.materia_nombre}
+                          </div>
+                        ))}
+                        {notasDia.map((n: NotaCalendario) => (
+                          <div
+                            key={`nota-${n.id}`}
+                            className="text-[9px] sm:text-[10px] bg-violet-950/90 text-violet-200 rounded px-1 truncate"
+                          >
+                            📝 {n.texto}
                           </div>
                         ))}
                       </div>
@@ -4557,6 +5606,98 @@ export default function Home() {
                     </>
                   )}
                 </div>
+              </div>
+
+              <div className="border-t border-zinc-800 pt-4 space-y-3">
+                <h4 className="text-xs font-bold uppercase tracking-wide text-violet-400">📝 Notas</h4>
+                {notasAgenda.length === 0 ? (
+                  <p className="text-xs text-zinc-500">
+                    {diaSeleccionado ? 'No hay notas en este día.' : 'No hay notas en este mes.'}
+                  </p>
+                ) : (
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {notasAgenda.map((n: NotaCalendario) => (
+                      <div
+                        key={n.id}
+                        className="bg-violet-950/30 border border-violet-800/50 rounded-lg p-2.5 text-xs space-y-1"
+                      >
+                        <div className="flex justify-between text-violet-300 font-semibold">
+                          <span>{n.fecha.split('T')[0].split('-').reverse().join('/')}</span>
+                          <span className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setNotaEditandoId(n.id);
+                                setNotaEditTexto(n.texto);
+                              }}
+                              title="Editar nota"
+                              className="opacity-70 hover:opacity-100 cursor-pointer"
+                            >
+                              ✎
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => eliminarNota(n.id)}
+                              title="Borrar nota"
+                              className="opacity-70 hover:opacity-100 cursor-pointer"
+                            >
+                              ✕
+                            </button>
+                          </span>
+                        </div>
+                        {notaEditandoId === n.id ? (
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={notaEditTexto}
+                              onChange={(e) => setNotaEditTexto(e.target.value)}
+                              maxLength={500}
+                              className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-2 py-1 text-xs"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => guardarEdicionNota(n.id)}
+                              className="bg-violet-600 hover:bg-violet-500 text-white px-2 rounded-lg cursor-pointer"
+                            >
+                              OK
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setNotaEditandoId(null)}
+                              className="text-zinc-400 hover:text-zinc-200 cursor-pointer"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
+                          <p className="text-zinc-200 whitespace-pre-wrap">{n.texto}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {diaSeleccionado ? (
+                  <form onSubmit={agregarNota} className="flex gap-2">
+                    <input
+                      type="text"
+                      value={notaTexto}
+                      onChange={(e) => setNotaTexto(e.target.value)}
+                      maxLength={500}
+                      placeholder="Escribí lo que quieras recordar..."
+                      className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!notaTexto.trim()}
+                      className="bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white text-xs font-semibold px-3 rounded-lg cursor-pointer"
+                    >
+                      + Nota
+                    </button>
+                  </form>
+                ) : (
+                  <p className="text-xs text-zinc-500">Tocá un día para agregarle una nota.</p>
+                )}
               </div>
 
               {diaSeleccionado && (
@@ -4653,6 +5794,92 @@ export default function Home() {
           </div>
         )}
 
+        {tab === 'plan' && (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-zinc-100">Plan de estudios</h2>
+                <p className="text-xs text-zinc-400">
+                  {usuario.carrera ? `${usuario.carrera} · ` : ''}
+                  {materias.length} materia{materias.length === 1 ? '' : 's'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={imprimirPlan}
+                disabled={materias.length === 0}
+                className="text-xs bg-zinc-900 hover:bg-zinc-800 disabled:opacity-40 text-zinc-200 border border-zinc-700 px-3.5 py-2 rounded-lg font-medium cursor-pointer"
+              >
+                🖨 Imprimir / guardar PDF
+              </button>
+            </div>
+
+            {materias.length === 0 ? (
+              <div className="text-center py-12 bg-zinc-900/50 border border-dashed border-zinc-800 rounded-xl">
+                <p className="text-zinc-400 text-sm">Todavía no cargaste materias.</p>
+              </div>
+            ) : (
+              aniosDelPlan.map((anio) => (
+                <div key={anio} className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
+                  <div className="px-4 py-2.5 bg-zinc-800/60 text-sm font-bold text-zinc-100">{anio}° Año</div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-xs text-zinc-400 border-b border-zinc-800">
+                          <th className="px-4 py-2 font-medium">Materia</th>
+                          <th className="px-4 py-2 font-medium">Cuatrimestre</th>
+                          <th className="px-4 py-2 font-medium">Correlativas</th>
+                          <th className="px-4 py-2 font-medium">Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {materias
+                          .filter((m: Materia) => (m.anio_carrera ?? 1) === anio)
+                          .sort(compararMaterias)
+                          .map((m: Materia) => {
+                            const reqs = (correlativas as Correlativa[]).filter((c) => c.materia_id === m.id);
+                            return (
+                              <tr key={m.id} className="border-b border-zinc-800 last:border-b-0 align-top">
+                                <td className="px-4 py-2.5 font-medium text-zinc-100">{m.nombre}</td>
+                                <td className="px-4 py-2.5 text-zinc-400 whitespace-nowrap">
+                                  {etiquetaCuatri(m.cuatrimestre)}
+                                </td>
+                                <td className="px-4 py-2.5 text-zinc-300">
+                                  {reqs.length === 0 ? (
+                                    <span className="text-zinc-500">—</span>
+                                  ) : (
+                                    reqs.map((c) => (
+                                      <span
+                                        key={c.correlativa_id}
+                                        className={`inline-block mr-1.5 mb-1 text-xs px-2 py-0.5 rounded ${
+                                          cumpleRequisito(c)
+                                            ? 'bg-emerald-950/60 text-emerald-300'
+                                            : 'bg-zinc-800 text-zinc-300'
+                                        }`}
+                                      >
+                                        {c.correlativa_nombre} ({c.tipo_requisito === 'aprobada' ? 'A' : 'R'})
+                                      </span>
+                                    ))
+                                  )}
+                                </td>
+                                <td className="px-4 py-2.5">
+                                  <span className={`text-xs px-2 py-0.5 rounded border ${coloresEstadoMateria[m.estado]}`}>
+                                    {m.estado}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))
+            )}
+            <p className="text-xs text-zinc-500">R = regular · A = aprobada. En verde, las que ya cumplís.</p>
+          </div>
+        )}
+
         {tab === 'correlativas' && (
           <div className="space-y-6">
             <form
@@ -4734,69 +5961,228 @@ export default function Home() {
               </div>
             )}
 
-            {correlativas.length === 0 ? (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              {renderOpciones(
+                corrVista,
+                [
+                  { valor: 'anio', etiqueta: '📚 Por año' },
+                  { valor: 'importancia', etiqueta: '⭐ Importancia' },
+                ],
+                (v) => setCorrVista(v as 'anio' | 'importancia')
+              )}
+              <p className="text-xs text-zinc-500">
+                Tocá la condición (regular / aprobada) para cambiarla, o ✕ para quitarla.
+              </p>
+            </div>
+
+            {materias.length === 0 ? (
               <div className="text-center py-12 bg-zinc-900/50 border border-dashed border-zinc-800 rounded-xl">
-                <p className="text-zinc-400 text-sm">Todavía no vinculaste ninguna correlativa.</p>
+                <p className="text-zinc-400 text-sm">Primero cargá tus materias.</p>
               </div>
-            ) : (
-              <div className="space-y-3">
-                {correlativasPorMateria.map((g) => {
-                  const cumplidas = g.reqs.filter(cumpleRequisito).length;
-                  const habilitada = cumplidas === g.reqs.length;
+            ) : corrVista === 'anio' ? (
+              <div className="space-y-8">
+                {aniosDelPlan.map((anio) => (
+                  <div key={anio} className="space-y-3">
+                    <div className="flex items-center gap-3">
+                      <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-200">{anio}° Año</h3>
+                      <div className="flex-1 border-t border-zinc-800" />
+                    </div>
 
-                  return (
-                    <div
-                      key={g.materia_id}
-                      className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <h3 className="text-base font-semibold text-zinc-100">{g.nombre}</h3>
-                          <p className="text-xs text-zinc-400">
-                            Requiere {g.reqs.length} materia{g.reqs.length === 1 ? '' : 's'}
-                          </p>
-                        </div>
-                        <span
-                          className={`text-xs px-2.5 py-1 rounded-lg ${
-                            habilitada ? 'bg-emerald-950 text-emerald-400' : 'bg-red-950 text-red-400'
-                          }`}
-                        >
-                          {habilitada ? 'Habilitada ✓' : `Faltan ${g.reqs.length - cumplidas}`}
-                        </span>
-                      </div>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                      {materias
+                        .filter((m: Materia) => (m.anio_carrera ?? 1) === anio)
+                        .sort(compararMaterias)
+                        .map((m: Materia) => {
+                          const reqs = (correlativas as Correlativa[]).filter((c) => c.materia_id === m.id);
+                          const cumplidas = reqs.filter(cumpleRequisito).length;
+                          const habilitada = cumplidas === reqs.length;
+                          const candidatas = materias.filter(
+                            (x: Materia) => x.id !== m.id && !reqs.some((r) => r.correlativa_id === x.id)
+                          );
 
-                      <div className="flex flex-wrap gap-2">
-                        {g.reqs.map((c) => {
-                          const ok = cumpleRequisito(c);
                           return (
-                            <div
-                              key={`${c.materia_id}-${c.correlativa_id}`}
-                              className={`flex items-center gap-2 text-xs px-2.5 py-1.5 rounded-lg border ${
-                                ok
-                                  ? 'bg-emerald-950/50 border-emerald-800 text-emerald-300'
-                                  : 'bg-red-950/40 border-red-900/60 text-red-300'
-                              }`}
-                            >
-                              <span>{ok ? '✓' : '•'}</span>
-                              <span className="font-medium">{c.correlativa_nombre}</span>
-                              <span className="opacity-70">
-                                ({c.tipo_requisito === 'aprobada' ? 'aprobada' : 'regular'})
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => eliminarCorrelativa(c.materia_id, c.correlativa_id)}
-                                title="Quitar esta correlativa"
-                                className="opacity-60 hover:opacity-100 cursor-pointer"
-                              >
-                                ✕
-                              </button>
+                            <div key={m.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                  <h4 className="text-sm font-semibold text-zinc-100">{m.nombre}</h4>
+                                  <p className="text-xs text-zinc-500">
+                                    {reqs.length === 0
+                                      ? 'Sin correlativas'
+                                      : `Requiere ${reqs.length} materia${reqs.length === 1 ? '' : 's'}`}
+                                  </p>
+                                </div>
+                                {reqs.length > 0 && (
+                                  <span
+                                    className={`text-xs px-2.5 py-1 rounded-lg ${
+                                      habilitada ? 'bg-emerald-950 text-emerald-400' : 'bg-red-950 text-red-400'
+                                    }`}
+                                  >
+                                    {habilitada ? 'Habilitada ✓' : `Faltan ${reqs.length - cumplidas}`}
+                                  </span>
+                                )}
+                              </div>
+
+                              {reqs.length > 0 && (
+                                <div className="flex flex-wrap gap-2">
+                                  {reqs.map((c) => {
+                                    const ok = cumpleRequisito(c);
+                                    return (
+                                      <div
+                                        key={`${c.materia_id}-${c.correlativa_id}`}
+                                        className={`flex items-center gap-2 text-xs px-2.5 py-1.5 rounded-lg border ${
+                                          ok
+                                            ? 'bg-emerald-950/50 border-emerald-800 text-emerald-300'
+                                            : 'bg-red-950/40 border-red-900/60 text-red-300'
+                                        }`}
+                                      >
+                                        <span>{ok ? '✓' : '•'}</span>
+                                        <span className="font-medium">{c.correlativa_nombre}</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => cambiarTipoCorrelativa(c)}
+                                          title="Cambiar entre regular y aprobada"
+                                          className="underline decoration-dotted opacity-80 hover:opacity-100 cursor-pointer"
+                                        >
+                                          {c.tipo_requisito === 'aprobada' ? 'aprobada' : 'regular'}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => eliminarCorrelativa(c.materia_id, c.correlativa_id)}
+                                          title="Quitar esta correlativa"
+                                          className="opacity-60 hover:opacity-100 cursor-pointer"
+                                        >
+                                          ✕
+                                        </button>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+
+                              {corrAgregandoA === m.id ? (
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <select
+                                    value={corrNuevoReq}
+                                    onChange={(e) => setCorrNuevoReq(e.target.value)}
+                                    className="flex-1 min-w-40 bg-zinc-950 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs"
+                                  >
+                                    <option value="">Elegí una materia...</option>
+                                    {candidatas.map((x: Materia) => (
+                                      <option key={x.id} value={x.id}>
+                                        {x.nombre}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <select
+                                    value={corrNuevoTipo}
+                                    onChange={(e) => setCorrNuevoTipo(e.target.value as 'regular' | 'aprobada')}
+                                    className="bg-zinc-950 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs"
+                                  >
+                                    <option value="regular">Regular</option>
+                                    <option value="aprobada">Aprobada</option>
+                                  </select>
+                                  <button
+                                    type="button"
+                                    disabled={!corrNuevoReq}
+                                    onClick={async () => {
+                                      await vincularCorrelativas(m.id, [Number(corrNuevoReq)], corrNuevoTipo);
+                                      setCorrNuevoReq('');
+                                    }}
+                                    className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-semibold px-3 py-1.5 rounded-lg cursor-pointer"
+                                  >
+                                    Agregar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setCorrAgregandoA(null)}
+                                    className="text-xs text-zinc-400 hover:text-zinc-200 cursor-pointer"
+                                  >
+                                    Cerrar
+                                  </button>
+                                </div>
+                              ) : (
+                                candidatas.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setCorrAgregandoA(m.id);
+                                      setCorrNuevoReq('');
+                                    }}
+                                    className="text-xs text-blue-400 hover:underline cursor-pointer"
+                                  >
+                                    + Agregar correlativa
+                                  </button>
+                                )
+                              )}
                             </div>
                           );
                         })}
-                      </div>
                     </div>
-                  );
-                })}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-xs text-zinc-400">Calcular el nivel según:</span>
+                  {renderOpciones(
+                    corrImportancia,
+                    [
+                      { valor: 'habilita', etiqueta: 'Materias que habilita' },
+                      { valor: 'requiere', etiqueta: 'Correlativas que requiere' },
+                    ],
+                    (v) => setCorrImportancia(v as 'habilita' | 'requiere')
+                  )}
+                </div>
+                <p className="text-xs text-zinc-500">
+                  {corrImportancia === 'habilita'
+                    ? 'Cuantas más materias dependen de una materia, más importante es aprobarla a tiempo.'
+                    : 'Cuantas más correlativas pide una materia, más pasos previos necesitás para llegar a ella.'}
+                </p>
+
+                <div className="space-y-2">
+                  {[...materias]
+                    .sort((a: Materia, b: Materia) => {
+                      const va = (corrImportancia === 'habilita' ? habilitaN : requiereN)[a.id] ?? 0;
+                      const vb = (corrImportancia === 'habilita' ? habilitaN : requiereN)[b.id] ?? 0;
+                      if (vb !== va) return vb - va;
+                      return (a.anio_carrera ?? 1) - (b.anio_carrera ?? 1) || a.nombre.localeCompare(b.nombre);
+                    })
+                    .map((m: Materia) => {
+                      const valor = (corrImportancia === 'habilita' ? habilitaN : requiereN)[m.id] ?? 0;
+                      const nivel = nivelImportancia(valor);
+                      return (
+                        <div
+                          key={m.id}
+                          className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3"
+                        >
+                          <div className="sm:w-1/3">
+                            <p className="text-sm font-semibold text-zinc-100">{m.nombre}</p>
+                            <p className="text-xs text-zinc-500">{m.anio_carrera ?? 1}° Año</p>
+                          </div>
+                          <div className="flex gap-4 text-xs text-zinc-400 sm:w-1/4">
+                            <span>
+                              Requiere <strong className="text-zinc-200">{requiereN[m.id] ?? 0}</strong>
+                            </span>
+                            <span>
+                              Habilita <strong className="text-zinc-200">{habilitaN[m.id] ?? 0}</strong>
+                            </span>
+                          </div>
+                          <div className="flex-1 flex items-center gap-3">
+                            <div className="flex-1 bg-zinc-800 rounded-full h-2 overflow-hidden">
+                              <div
+                                className={`${nivel.barra} h-full transition-all`}
+                                style={{ width: `${Math.min(100, valor * 25)}%` }}
+                              />
+                            </div>
+                            <span className={`text-xs font-semibold px-2.5 py-1 rounded-lg whitespace-nowrap ${nivel.clase}`}>
+                              {nivel.texto}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
               </div>
             )}
           </div>
